@@ -1759,6 +1759,11 @@ class HaKanbanTodoCard extends LitElementBase {
         delay: 150,
         delayOnTouchOnly: true,
         touchStartThreshold: 5,
+        // Tighter swap math: items reorder as soon as the pointer
+        // crosses 65% of a neighbour (default 1.0 requires full overlap,
+        // which makes drop-position feel imprecise on small cards).
+        swapThreshold: 0.65,
+        invertSwap: true,
         ghostClass: "sortable-ghost",
         chosenClass: "sortable-chosen",
         dragClass: "sortable-drag",
@@ -1807,32 +1812,51 @@ class HaKanbanTodoCard extends LitElementBase {
   }
 
   async _onSortableEnd(ev) {
+    // Ignore a second drop if the previous one is still flushing to HA.
+    // Prevents using a stale uid (from a DOM node LitElement is about to replace).
+    if (this._dragOpInFlight) {
+      console.warn(
+        "ha-kanban-todo-card: drop ignored — previous operation still in flight"
+      );
+      return;
+    }
+
     const { item, from, to, newIndex } = ev;
     const uid = item?.dataset?.uid;
-    if (!uid) return;
+    const sourceEntity = from?.closest(".kanban-col")?.dataset?.entity;
+    const targetEntity = to?.closest(".kanban-col")?.dataset?.entity;
+    if (!uid || !sourceEntity || !targetEntity) return;
 
-    const sourceEntity = from.closest(".kanban-col")?.dataset?.entity;
-    const targetEntity = to.closest(".kanban-col")?.dataset?.entity;
-    if (!sourceEntity || !targetEntity) return;
+    const sourceItems = this._itemsByEntity[sourceEntity] || [];
+    const targetItems = this._itemsByEntity[targetEntity] || [];
 
-    // Determine siblings by walking the *target* DOM after the drop
+    // Stale-uid guard: if the DOM uid is unknown to our data (because a
+    // previous drop already re-keyed it on the server), abort and refresh.
+    const moved =
+      sourceItems.find((i) => i.uid === uid) ||
+      targetItems.find((i) => i.uid === uid);
+    if (!moved) {
+      await Promise.all([
+        this._fetchItemsFor(sourceEntity),
+        sourceEntity !== targetEntity
+          ? this._fetchItemsFor(targetEntity)
+          : Promise.resolve(),
+      ]);
+      return;
+    }
+
+    // Compute new position from siblings (after the DOM move)
     const targetNodes = Array.from(to.querySelectorAll(".item"));
     const uids = targetNodes.map((n) => n.dataset.uid);
-
-    const targetItems = this._itemsByEntity[targetEntity] || [];
-    const sourceItems = this._itemsByEntity[sourceEntity] || [];
-
     const prevUid = uids[newIndex - 1];
     const nextUid = uids[newIndex + 1];
     const prevItem = targetItems.find((i) => i.uid === prevUid);
     const nextItem = targetItems.find((i) => i.uid === nextUid);
-
     const prevPos = prevItem ? this._getItemPosition(prevItem) : null;
     const nextPos = nextItem ? this._getItemPosition(nextItem) : null;
 
     let newPos;
     if (prevPos === null && nextPos === null) {
-      // target list has no positioned items yet; base on index
       newPos = (newIndex + 1) * 1000;
     } else if (prevPos === null) {
       newPos = nextPos - 500;
@@ -1842,21 +1866,9 @@ class HaKanbanTodoCard extends LitElementBase {
       newPos = (prevPos + nextPos) / 2;
     }
 
-    // Find the moved item (may exist in either list depending on DOM state)
-    const moved =
-      sourceItems.find((i) => i.uid === uid) ||
-      targetItems.find((i) => i.uid === uid);
-    if (!moved) {
-      // fallback: refresh both lists and abort
-      await this._fetchItemsFor(sourceEntity);
-      if (sourceEntity !== targetEntity) {
-        await this._fetchItemsFor(targetEntity);
-      }
-      return;
-    }
-
     const newDesc = this._setPositionInDescription(moved.description, newPos);
 
+    this._dragOpInFlight = true;
     try {
       if (sourceEntity === targetEntity) {
         // Same-list reorder: update description with new position
@@ -1867,11 +1879,9 @@ class HaKanbanTodoCard extends LitElementBase {
         });
         await this._fetchItemsFor(sourceEntity);
       } else {
-        // Cross-list: remove from source, add to target (preserve description + position)
-        await this.hass.callService("todo", "remove_item", {
-          entity_id: sourceEntity,
-          item: uid,
-        });
+        // Cross-list: ADD to target FIRST, then remove from source.
+        // If the second call fails we end up with a duplicate (recoverable
+        // by the user) rather than a lost task.
         const addPayload = {
           entity_id: targetEntity,
           item: moved.summary,
@@ -1881,15 +1891,30 @@ class HaKanbanTodoCard extends LitElementBase {
           addPayload.due_date = moved.due || moved.due_date;
         }
         await this.hass.callService("todo", "add_item", addPayload);
-        await this._fetchItemsFor(sourceEntity);
-        await this._fetchItemsFor(targetEntity);
+        await this.hass.callService("todo", "remove_item", {
+          entity_id: sourceEntity,
+          item: uid,
+        });
+        await Promise.all([
+          this._fetchItemsFor(sourceEntity),
+          this._fetchItemsFor(targetEntity),
+        ]);
       }
     } catch (err) {
       console.error("ha-kanban-todo-card: sortable end failed", err);
-      await this._fetchItemsFor(sourceEntity);
-      if (sourceEntity !== targetEntity) {
-        await this._fetchItemsFor(targetEntity);
+      // Refresh to sync UI with server truth.
+      try {
+        await Promise.all([
+          this._fetchItemsFor(sourceEntity),
+          sourceEntity !== targetEntity
+            ? this._fetchItemsFor(targetEntity)
+            : Promise.resolve(),
+        ]);
+      } catch (_e) {
+        /* noop */
       }
+    } finally {
+      this._dragOpInFlight = false;
     }
   }
 
