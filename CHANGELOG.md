@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.0] - 2026-04-18
+
+### Added
+
+- **Manual ordering within and between lists** — items carry a `position` value in their description, used for sorting.
+- **SortableJS integration** — smooth drag animations, drop-position preview, touch support on mobile.
+- New `sort_by: manual` per-list option (default in Kanban layout).
+
+### Changed
+
+- Replaced HTML5 Drag-and-Drop with SortableJS for better UX and reliability.
+- Position is computed via midpoint-of-siblings so rarely requires renumbering.
+
+### Removed
+
+- Custom HTML5 DnD handlers (now provided by SortableJS).
+
+### Dependencies
+
+- SortableJS 1.15.6 is loaded dynamically from jsDelivr CDN on first Kanban render. No extra installation step required.
+
 ## [1.0.0] - 2026-04-18
 
 ### Added

@@ -651,6 +651,17 @@ const DEFAULT_PROGRESS_COLORS = [
 // couleur neutre (listes vides)
 const DEFAULT_EMPTY_LIST_COLOR = "#9ca3af";
 
+// ---- SortableJS dynamic ESM loader (cached at module level) ----
+let _SortablePromise = null;
+function loadSortable() {
+  if (!_SortablePromise) {
+    _SortablePromise = import(
+      "https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/+esm"
+    ).then((m) => m.default || m.Sortable || m);
+  }
+  return _SortablePromise;
+}
+
 // ---- UI translations (only UI strings, not your todo content) ----
 const UI_LABELS = {
   en: {
@@ -956,9 +967,43 @@ class HaKanbanTodoCard extends LitElementBase {
     return map[key];
   }
 
+  // ------------------ POSITION (manual ordering) ------------------
+
+  _getItemPosition(item) {
+    const desc = item?.description || "";
+    const m = desc.match(/(?:^|\n)position:\s*(-?\d+(?:\.\d+)?)(?:\n|$)/);
+    return m ? parseFloat(m[1]) : null;
+  }
+
+  _setPositionInDescription(desc, pos) {
+    const cleaned = (desc || "")
+      .replace(/(?:^|\n)position:\s*-?\d+(?:\.\d+)?\s*/g, "\n")
+      .replace(/^\n+/, "")
+      .replace(/\n+$/, "")
+      .trim();
+    return cleaned ? `${cleaned}\nposition: ${pos}` : `position: ${pos}`;
+  }
+
   _sortItemsForList(list, items) {
-    const mode = (list && list.sort_by) || "none";
     if (!items || items.length <= 1) return items || [];
+
+    const layout = (this._config && this._config.layout) || "kanban";
+    const explicit = list && list.sort_by;
+    const mode = explicit || (layout === "kanban" ? "manual" : "none");
+
+    // 0) Tri manuel par position (default in Kanban)
+    if (mode === "manual") {
+      const arr = [...items];
+      arr.sort((a, b) => {
+        const pa = this._getItemPosition(a);
+        const pb = this._getItemPosition(b);
+        if (pa === null && pb === null) return 0;
+        if (pa === null) return 1;
+        if (pb === null) return -1;
+        return pa - pb;
+      });
+      return arr;
+    }
 
     // 1) Tri par date d'échéance HA
     if (mode === "due") {
@@ -1267,21 +1312,21 @@ class HaKanbanTodoCard extends LitElementBase {
         }
       }
 
-      /* ============ Drag-and-Drop ============ */
-      .item[draggable="true"] {
+      /* ============ Drag-and-Drop (SortableJS) ============ */
+      .kanban-col .item {
         cursor: grab;
       }
-      .item[draggable="true"]:active {
-        cursor: grabbing;
-      }
-      .item.dragging {
+      .sortable-ghost {
         opacity: 0.4;
+        background: var(--primary-color) !important;
+        color: transparent !important;
       }
-      .col-items.drop-target {
-        outline: 2px dashed var(--primary-color);
-        outline-offset: -4px;
-        background: var(--primary-color);
-        background-color: color-mix(in srgb, var(--primary-color) 10%, transparent);
+      .sortable-drag {
+        opacity: 0.9;
+        transform: rotate(2deg);
+      }
+      .sortable-chosen {
+        cursor: grabbing;
       }
 
       /* ============ Kanban item cards ============ */
@@ -1372,12 +1417,7 @@ class HaKanbanTodoCard extends LitElementBase {
           <span class="col-count">${active.length}</span>
         </div>
         ${this._renderAddRow(list)}
-        <div
-          class="col-items"
-          @dragover=${(ev) => this._onDragOver(ev)}
-          @dragleave=${(ev) => this._onDragLeave(ev)}
-          @drop=${(ev) => this._onDrop(ev, list.entity)}
-        >
+        <div class="col-items">
           ${active.length === 0
             ? html`<div class="empty">${this._ui("empty_active")}</div>`
             : active.map((it) => this._renderItem(list, it))
@@ -1592,7 +1632,6 @@ class HaKanbanTodoCard extends LitElementBase {
   }
 
   _renderItem(list, item, completed) {
-    const isKanban = (this._config.layout || "kanban") === "kanban";
     const rawSummary = item.summary || "";
     const withoutAuto = this._stripAutoRemoveMeta(rawSummary);
     const cats = this._getCategories(list);
@@ -1609,9 +1648,7 @@ class HaKanbanTodoCard extends LitElementBase {
     return html`
       <div
         class="item"
-        draggable="${isKanban ? "true" : "false"}"
-        @dragstart=${isKanban ? (ev) => this._onDragStart(ev, list.entity, item) : null}
-        @dragend=${isKanban ? (ev) => this._onDragEnd(ev) : null}
+        data-uid="${item.uid || ""}"
       >
         <div
           class="item-icon"
@@ -1660,90 +1697,149 @@ class HaKanbanTodoCard extends LitElementBase {
     this._holdTimer = null;
   }
 
-  // ------------------ DRAG & DROP (Kanban only) ------------------
+  // ------------------ DRAG & DROP (SortableJS, Kanban only) ------------------
 
-  _onDragStart(ev, sourceEntity, item) {
-    ev.dataTransfer.effectAllowed = "move";
-    ev.dataTransfer.setData(
-      "application/x-ha-kanban-todo",
-      JSON.stringify({
-        sourceEntity,
-        uid: item.uid,
-        summary: item.summary,
-        description: item.description || "",
-        status: item.status,
-      })
-    );
-    // Fallback MIME so browsers that ignore custom types still populate data
-    ev.dataTransfer.setData("text/plain", item.summary || "");
-    ev.currentTarget.classList.add("dragging");
+  updated(changedProps) {
+    if (super.updated) super.updated(changedProps);
+    const layout = (this._config && this._config.layout) || "kanban";
+    if (layout === "kanban") {
+      this._initSortables();
+    } else {
+      this._destroySortables();
+    }
   }
 
-  _onDragEnd(ev) {
-    ev.currentTarget.classList.remove("dragging");
+  disconnectedCallback() {
+    if (super.disconnectedCallback) super.disconnectedCallback();
+    this._destroySortables();
   }
 
-  _onDragOver(ev) {
-    ev.preventDefault(); // allow drop
-    ev.dataTransfer.dropEffect = "move";
-    ev.currentTarget.classList.add("drop-target");
-  }
-
-  _onDragLeave(ev) {
-    ev.currentTarget.classList.remove("drop-target");
-  }
-
-  async _onDrop(ev, targetEntity) {
-    ev.preventDefault();
-    ev.currentTarget.classList.remove("drop-target");
-
-    const raw = ev.dataTransfer.getData("application/x-ha-kanban-todo");
-    if (!raw) return;
-
-    let payload;
+  async _initSortables() {
+    let Sortable;
     try {
-      payload = JSON.parse(raw);
-    } catch {
+      Sortable = await loadSortable();
+    } catch (err) {
+      console.error("ha-kanban-todo-card: failed to load SortableJS", err);
+      return;
+    }
+    if (!Sortable) return;
+
+    this._destroySortables();
+    this._sortables = [];
+
+    const cols = this.renderRoot?.querySelectorAll?.(".col-items");
+    if (!cols || !cols.length) return;
+
+    cols.forEach((col) => {
+      const instance = new Sortable(col, {
+        group: "ha-kanban-todos",
+        animation: 180,
+        ghostClass: "sortable-ghost",
+        chosenClass: "sortable-chosen",
+        dragClass: "sortable-drag",
+        onEnd: (ev) => this._onSortableEnd(ev),
+      });
+      this._sortables.push(instance);
+    });
+  }
+
+  _destroySortables() {
+    if (this._sortables && this._sortables.length) {
+      this._sortables.forEach((s) => {
+        try {
+          s.destroy();
+        } catch (_e) {
+          /* noop */
+        }
+      });
+    }
+    this._sortables = [];
+  }
+
+  async _onSortableEnd(ev) {
+    const { item, from, to, newIndex } = ev;
+    const uid = item?.dataset?.uid;
+    if (!uid) return;
+
+    const sourceEntity = from.closest(".kanban-col")?.dataset?.entity;
+    const targetEntity = to.closest(".kanban-col")?.dataset?.entity;
+    if (!sourceEntity || !targetEntity) return;
+
+    // Determine siblings by walking the *target* DOM after the drop
+    const targetNodes = Array.from(to.querySelectorAll(".item"));
+    const uids = targetNodes.map((n) => n.dataset.uid);
+
+    const targetItems = this._itemsByEntity[targetEntity] || [];
+    const sourceItems = this._itemsByEntity[sourceEntity] || [];
+
+    const prevUid = uids[newIndex - 1];
+    const nextUid = uids[newIndex + 1];
+    const prevItem = targetItems.find((i) => i.uid === prevUid);
+    const nextItem = targetItems.find((i) => i.uid === nextUid);
+
+    const prevPos = prevItem ? this._getItemPosition(prevItem) : null;
+    const nextPos = nextItem ? this._getItemPosition(nextItem) : null;
+
+    let newPos;
+    if (prevPos === null && nextPos === null) {
+      // target list has no positioned items yet; base on index
+      newPos = (newIndex + 1) * 1000;
+    } else if (prevPos === null) {
+      newPos = nextPos - 500;
+    } else if (nextPos === null) {
+      newPos = prevPos + 500;
+    } else {
+      newPos = (prevPos + nextPos) / 2;
+    }
+
+    // Find the moved item (may exist in either list depending on DOM state)
+    const moved =
+      sourceItems.find((i) => i.uid === uid) ||
+      targetItems.find((i) => i.uid === uid);
+    if (!moved) {
+      // fallback: refresh both lists and abort
+      await this._fetchItemsFor(sourceEntity);
+      if (sourceEntity !== targetEntity) {
+        await this._fetchItemsFor(targetEntity);
+      }
       return;
     }
 
-    if (!payload || !payload.sourceEntity || payload.sourceEntity === targetEntity) {
-      return; // noop if dropped on same column
-    }
+    const newDesc = this._setPositionInDescription(moved.description, newPos);
 
-    // Optimistic UI: move item locally first
-    const srcItems = [...(this._itemsByEntity[payload.sourceEntity] || [])];
-    const idx = srcItems.findIndex((i) => i.uid === payload.uid);
-    if (idx < 0) return;
-    const [movedItem] = srcItems.splice(idx, 1);
-    const tgtItems = [...(this._itemsByEntity[targetEntity] || []), movedItem];
-
-    this._itemsByEntity = {
-      ...this._itemsByEntity,
-      [payload.sourceEntity]: srcItems,
-      [targetEntity]: tgtItems,
-    };
-    this.requestUpdate();
-
-    // Persist via HA service calls
     try {
-      await this.hass.callService("todo", "remove_item", {
-        entity_id: payload.sourceEntity,
-        item: payload.uid,
-      });
-      await this.hass.callService("todo", "add_item", {
-        entity_id: targetEntity,
-        item: payload.summary,
-        ...(payload.description ? { description: payload.description } : {}),
-      });
-      // Refresh both lists so uid of the new item is correct
-      await this._fetchItemsFor(payload.sourceEntity);
-      await this._fetchItemsFor(targetEntity);
+      if (sourceEntity === targetEntity) {
+        // Same-list reorder: update description with new position
+        await this.hass.callService("todo", "update_item", {
+          entity_id: sourceEntity,
+          item: uid,
+          description: newDesc,
+        });
+        await this._fetchItemsFor(sourceEntity);
+      } else {
+        // Cross-list: remove from source, add to target (preserve description + position)
+        await this.hass.callService("todo", "remove_item", {
+          entity_id: sourceEntity,
+          item: uid,
+        });
+        const addPayload = {
+          entity_id: targetEntity,
+          item: moved.summary,
+          description: newDesc,
+        };
+        if (moved.due || moved.due_date) {
+          addPayload.due_date = moved.due || moved.due_date;
+        }
+        await this.hass.callService("todo", "add_item", addPayload);
+        await this._fetchItemsFor(sourceEntity);
+        await this._fetchItemsFor(targetEntity);
+      }
     } catch (err) {
-      console.error("ha-kanban-todo-card: DnD failed, rolling back.", err);
-      // Rollback: re-fetch both lists to restore correct state
-      await this._fetchItemsFor(payload.sourceEntity);
-      await this._fetchItemsFor(targetEntity);
+      console.error("ha-kanban-todo-card: sortable end failed", err);
+      await this._fetchItemsFor(sourceEntity);
+      if (sourceEntity !== targetEntity) {
+        await this._fetchItemsFor(targetEntity);
+      }
     }
   }
 
