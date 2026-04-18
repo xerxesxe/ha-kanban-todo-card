@@ -64,7 +64,7 @@ const css = LitElementBase.prototype.css;
 const AUTO_REMOVE_TAG_REGEX = /#rtrm\((\d+),(\d+)\)/;
 
 // Presets intégrés
-const RAPTOR_TODO_PRESETS = {
+const KANBAN_TODO_PRESETS = {
   // ----- COURSES : ~20 RAYONS -----
   grocery: [
     {
@@ -654,7 +654,7 @@ const DEFAULT_EMPTY_LIST_COLOR = "#9ca3af";
 // ---- UI translations (only UI strings, not your todo content) ----
 const UI_LABELS = {
   en: {
-    config_missing_lists: "Raptor Todo Hub Card needs a 'lists' field.",
+    config_missing_lists: "HA Kanban Todo Card needs a 'lists' field.",
     default_title: "Tasks & shopping",
     subtitle: (done, total, percent, isEmpty) =>
       isEmpty ? "No tasks in this list." : `${done}/${total} completed (${percent}%)`,
@@ -671,7 +671,7 @@ const UI_LABELS = {
   },
   fr: {
     config_missing_lists:
-      "La carte Raptor Todo Hub a besoin d'un champ 'lists'.",
+      "La carte HA Kanban Todo a besoin d'un champ 'lists'.",
     default_title: "Tâches & courses",
     subtitle: (done, total, percent, isEmpty) =>
       isEmpty ? "Aucune tâche dans cette liste." : `${done}/${total} tâches terminées (${percent}%)`,
@@ -689,7 +689,7 @@ const UI_LABELS = {
   },
 };
 
-class RaptorTodoHubCard extends LitElementBase {
+class HaKanbanTodoCard extends LitElementBase {
   static get properties() {
     return {
       hass: {},
@@ -823,7 +823,7 @@ class RaptorTodoHubCard extends LitElementBase {
               "completed"
             );
           } catch (err) {
-            console.error("RaptorTodoHubCard: erreur ajout tag rtrm", err);
+            console.error("HaKanbanTodoCard: erreur ajout tag rtrm", err);
           }
         }
         continue;
@@ -844,7 +844,7 @@ class RaptorTodoHubCard extends LitElementBase {
           });
         } catch (err) {
           console.error(
-            "RaptorTodoHubCard: erreur remove_item auto (persistant)",
+            "HaKanbanTodoCard: erreur remove_item auto (persistant)",
             err
           );
         }
@@ -1484,14 +1484,14 @@ class RaptorTodoHubCard extends LitElementBase {
       });
       await this._fetchItemsFor(list.entity);
     } catch (err) {
-      console.error("RaptorTodoHubCard: erreur suppression manuelle", err);
+      console.error("HaKanbanTodoCard: erreur suppression manuelle", err);
     }
   }
 
   // ------------------ CATEGORIES & PRESETS ------------------
 
   _getCategories(list) {
-    const fromPreset = list.preset ? RAPTOR_TODO_PRESETS[list.preset] || [] : [];
+    const fromPreset = list.preset ? KANBAN_TODO_PRESETS[list.preset] || [] : [];
     const custom = list.categories || [];
 
     const merged = [...fromPreset];
@@ -1636,7 +1636,7 @@ class RaptorTodoHubCard extends LitElementBase {
       }
     } catch (err) {
       console.error(
-        "Raptor Todo Hub Card: erreur todo/item/list pour",
+        "HA Kanban Todo Card: erreur todo/item/list pour",
         entityId,
         err
       );
@@ -1678,7 +1678,7 @@ class RaptorTodoHubCard extends LitElementBase {
       this._newText = "";
       await this._fetchItemsFor(list.entity);
     } catch (err) {
-      console.error("Raptor Todo Hub Card: erreur ajout item", err);
+      console.error("HA Kanban Todo Card: erreur ajout item", err);
     }
   }
 
@@ -1710,7 +1710,7 @@ class RaptorTodoHubCard extends LitElementBase {
 
       await this._fetchItemsFor(entityId);
     } catch (err) {
-      console.error("RaptorTodoHubCard: erreur update item", err);
+      console.error("HaKanbanTodoCard: erreur update item", err);
     }
   }
 
@@ -1723,10 +1723,19 @@ class RaptorTodoHubCard extends LitElementBase {
   }
 }
 
-customElements.define("raptor-todo-hub-card", RaptorTodoHubCard);
+customElements.define("ha-kanban-todo-card", HaKanbanTodoCard);
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: "ha-kanban-todo-card",
+  name: "HA Kanban Todo Card",
+  description:
+    "Multi-list todo hub with Kanban layout and drag-and-drop between lists.",
+  preview: true,
+});
 
 console.info(
-  "%cRaptor Todo Hub Card%c loaded",
+  "%cHA Kanban Todo Card%c loaded",
   "color: white; background:#22c55e; padding:2px 6px; border-radius:4px;",
   "color:#22c55e;"
 );
