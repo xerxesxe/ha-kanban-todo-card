@@ -1749,12 +1749,10 @@ class HaKanbanTodoCard extends LitElementBase {
       const instance = new Sortable(col, {
         group: "ha-kanban-todos",
         animation: 180,
-        // Use fallback clone as drag image — works reliably across all browsers
-        // and on touch devices.
-        forceFallback: true,
-        fallbackClass: "sortable-fallback",
-        fallbackOnBody: true,
-        fallbackTolerance: 5,
+        // Native HTML5 DnD (no forceFallback) — works reliably in Shadow DOM
+        // contexts like Home Assistant Lovelace. Touch is supported via
+        // SortableJS's internal pointer polyfill.
+        supportPointer: true,
         // Touch: require 150ms long-press before drag starts, so regular taps
         // still trigger click/toggle handlers.
         delay: 150,
@@ -1763,7 +1761,7 @@ class HaKanbanTodoCard extends LitElementBase {
         ghostClass: "sortable-ghost",
         chosenClass: "sortable-chosen",
         dragClass: "sortable-drag",
-        // Don't start drag if user clicked the complete icon or long-press target.
+        // Don't start drag if user clicked the complete icon.
         filter: ".item-icon",
         preventOnFilter: false,
         onEnd: (ev) => this._onSortableEnd(ev),
