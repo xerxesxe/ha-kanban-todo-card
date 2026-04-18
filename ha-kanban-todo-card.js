@@ -1315,18 +1315,33 @@ class HaKanbanTodoCard extends LitElementBase {
       /* ============ Drag-and-Drop (SortableJS) ============ */
       .kanban-col .item {
         cursor: grab;
+        user-select: none;
       }
+      /* Ghost = placeholder that shows where item will land */
       .sortable-ghost {
-        opacity: 0.4;
-        background: var(--primary-color) !important;
-        color: transparent !important;
+        opacity: 1 !important;
+        background: transparent !important;
+        border: 2px dashed var(--primary-color) !important;
+        box-shadow: none !important;
+        transform: none !important;
       }
+      .sortable-ghost * {
+        visibility: hidden !important;
+      }
+      /* Drag = the item visually following the cursor */
       .sortable-drag {
-        opacity: 0.9;
-        transform: rotate(2deg);
+        opacity: 0.95 !important;
+        transform: rotate(1deg);
+        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2) !important;
+        cursor: grabbing;
       }
       .sortable-chosen {
         cursor: grabbing;
+      }
+      /* Fallback clone (forceFallback=true) */
+      .sortable-fallback {
+        opacity: 0.9 !important;
+        transform: rotate(1deg);
       }
 
       /* ============ Kanban item cards ============ */
@@ -1734,9 +1749,23 @@ class HaKanbanTodoCard extends LitElementBase {
       const instance = new Sortable(col, {
         group: "ha-kanban-todos",
         animation: 180,
+        // Use fallback clone as drag image — works reliably across all browsers
+        // and on touch devices.
+        forceFallback: true,
+        fallbackClass: "sortable-fallback",
+        fallbackOnBody: true,
+        fallbackTolerance: 5,
+        // Touch: require 150ms long-press before drag starts, so regular taps
+        // still trigger click/toggle handlers.
+        delay: 150,
+        delayOnTouchOnly: true,
+        touchStartThreshold: 5,
         ghostClass: "sortable-ghost",
         chosenClass: "sortable-chosen",
         dragClass: "sortable-drag",
+        // Don't start drag if user clicked the complete icon or long-press target.
+        filter: ".item-icon",
+        preventOnFilter: false,
         onEnd: (ev) => this._onSortableEnd(ev),
       });
       this._sortables.push(instance);
