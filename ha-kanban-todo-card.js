@@ -1205,6 +1205,67 @@ class HaKanbanTodoCard extends LitElementBase {
         background: rgba(0, 0, 0, 0.08);
         letter-spacing: 0.01em;
       }
+
+      /* ============ Kanban layout ============ */
+      .kanban-header {
+        padding: 12px 16px 8px;
+      }
+      .kanban-header .title {
+        font-weight: 600;
+        font-size: 1.2em;
+      }
+      .kanban-grid {
+        display: grid;
+        gap: 12px;
+        padding: 8px 12px 16px;
+        align-items: start;
+      }
+      .kanban-col {
+        background: var(--secondary-background-color, rgba(0, 0, 0, 0.04));
+        border-radius: 8px;
+        padding: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
+      }
+      .col-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 8px;
+        font-weight: 600;
+        border-bottom: 1px solid var(--divider-color);
+        margin-bottom: 4px;
+      }
+      .col-label {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .col-count {
+        background: var(--primary-color);
+        color: var(--text-primary-color, white);
+        border-radius: 10px;
+        padding: 2px 8px;
+        font-size: 0.8em;
+        font-weight: 500;
+      }
+      .col-items {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-height: 40px;
+      }
+
+      /* Responsive: stack columns vertically on narrow viewport */
+      @media (max-width: 700px) {
+        .kanban-grid {
+          grid-template-columns: 1fr !important;
+        }
+      }
     `;
   }
 
@@ -1220,9 +1281,68 @@ class HaKanbanTodoCard extends LitElementBase {
   }
 
   _renderKanban() {
-    // Placeholder: actual Kanban layout implemented in Task 5.
-    // Falling back to tabs so the card stays usable during incremental development.
-    return this._renderTabs();
+    const lists = this._config.lists;
+    if (!lists?.length) {
+      return html`<ha-card>${this._ui("no_list")}</ha-card>`;
+    }
+
+    const title = this._config.title || this._ui("default_title");
+
+    return html`
+      <ha-card>
+        <div class="kanban-header">
+          <div class="title">${title}</div>
+        </div>
+        <div
+          class="kanban-grid"
+          style="grid-template-columns: repeat(${lists.length}, minmax(0, 1fr));"
+        >
+          ${lists.map((l) => this._renderKanbanColumn(l))}
+        </div>
+      </ha-card>
+    `;
+  }
+
+  _renderKanbanColumn(list) {
+    const stateObj = this.hass.states[list.entity];
+    if (!stateObj) {
+      return html`
+        <div class="kanban-col">
+          <div class="col-header">
+            ${list.icon ? html`<ha-icon icon="${list.icon}"></ha-icon>` : ""}
+            <span class="col-label">${list.label || list.entity}</span>
+          </div>
+          <div class="empty">${this._ui("entity_missing", list.entity)}</div>
+        </div>
+      `;
+    }
+
+    let items = this._itemsByEntity[list.entity];
+    if (!items) {
+      this._fetchItemsFor(list.entity);
+      items = [];
+    }
+
+    const activeRaw = items.filter((it) => it.status !== "completed");
+    const completedRaw = items.filter((it) => it.status === "completed");
+    const active = this._sortItemsForList(list, activeRaw);
+
+    return html`
+      <div class="kanban-col" data-entity="${list.entity}">
+        <div class="col-header">
+          ${list.icon ? html`<ha-icon icon="${list.icon}"></ha-icon>` : ""}
+          <span class="col-label">${list.label || list.entity}</span>
+          <span class="col-count">${active.length}</span>
+        </div>
+        ${this._renderAddRow(list)}
+        <div class="col-items">
+          ${active.length === 0
+            ? html`<div class="empty">${this._ui("empty_active")}</div>`
+            : active.map((it) => this._renderItem(list, it))
+          }
+        </div>
+      </div>
+    `;
   }
 
   _renderTabs() {
