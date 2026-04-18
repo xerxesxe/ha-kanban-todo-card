@@ -99,12 +99,12 @@ On drop:
 1. **Optimistic UI** — the item moves locally immediately
 2. **HA service calls** — `remove_item` on source, `add_item` on target
 3. **Re-fetch** both lists to sync the new UID
-4. **Rollback** (re-fetch only) if either service call errors
+4. On cross-list drops, the target `add_item` runs before the source `remove_item`. If the second call fails, you get a temporary duplicate (recoverable) rather than a lost task.
 
 Known limitations:
 
 - Touch DnD on mobile browsers is unreliable (HTML5 DnD quirk). Desktop-first for v1.0.
-- Due dates (`item.due`) are **not** carried across the move. Category (encoded as hashtag in summary) is preserved.
+- Due dates, descriptions, and category hashtags in the summary are preserved.
 - Brief window between optimistic move and re-fetch where the item references the old UID — in rare cases a rapid click immediately after drop could hit a stale UID.
 
 DnD is disabled in `layout: tabs`.

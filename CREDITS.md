@@ -16,4 +16,4 @@ All base features — multi-list rendering, category presets (grocery/urgency/ro
 - Copyright (c) 2026 xerxesxe
 - Licensed under MIT (same as upstream)
 
-New in this fork: `layout: kanban | tabs` config option, horizontal multi-column Kanban rendering, HTML5 Drag-and-Drop between columns with optimistic UI + rollback.
+New in this fork: `layout: kanban | tabs` config option, horizontal Kanban rendering via CSS Grid, SortableJS-based drag-and-drop with animated reordering both within and across columns, manual ordering via `position:` value in item descriptions, auto-renumbering on float-precision exhaustion, and in-card error banner when SortableJS fails to load.

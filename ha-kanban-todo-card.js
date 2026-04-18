@@ -63,6 +63,12 @@ const css = LitElementBase.prototype.css;
 // Tag de suppression auto stocké dans le summary : #rtrm(start,delay)
 const AUTO_REMOVE_TAG_REGEX = /#rtrm\((\d+),(\d+)\)/;
 
+const HA_KANBAN_TODO_CARD_VERSION = "1.2.0";
+
+// Minimum gap between adjacent manual positions before we must renumber
+// (float precision exhaustion — after ~52 midpoint inserts at the same spot).
+const MIN_POSITION_GAP = 0.001;
+
 // Presets intégrés
 const KANBAN_TODO_PRESETS = {
   // ----- COURSES : ~20 RAYONS -----
@@ -698,6 +704,38 @@ const UI_LABELS = {
       `Supprimer définitivement la tâche :\n\n"${label}" ?`,
     due_prefix: "Échéance",
   },
+  de: {
+    config_missing_lists: "HA Kanban Todo Card benötigt ein 'lists'-Feld.",
+    default_title: "Aufgaben & Einkäufe",
+    subtitle: (done, total, percent, isEmpty) =>
+      isEmpty ? "Keine Aufgaben in dieser Liste." : `${done}/${total} erledigt (${percent}%)`,
+    active: "OFFEN",
+    completed: "ERLEDIGT",
+    empty_active: "Keine offenen Aufgaben 🎉",
+    empty_completed: "Keine erledigten Aufgaben.",
+    add_placeholder: "Hinzufügen…",
+    add_button: "Hinzufügen",
+    no_list: "Keine Liste konfiguriert.",
+    entity_missing: (id) => `Entität nicht gefunden: ${id}`,
+    confirm_delete: (label) => `Diese Aufgabe dauerhaft löschen?\n\n"${label}"`,
+    due_prefix: "Fällig",
+  },
+  es: {
+    config_missing_lists: "HA Kanban Todo Card necesita un campo 'lists'.",
+    default_title: "Tareas y compras",
+    subtitle: (done, total, percent, isEmpty) =>
+      isEmpty ? "Sin tareas en esta lista." : `${done}/${total} completadas (${percent}%)`,
+    active: "ACTIVAS",
+    completed: "COMPLETADAS",
+    empty_active: "Sin tareas activas 🎉",
+    empty_completed: "Sin tareas completadas.",
+    add_placeholder: "Añadir…",
+    add_button: "Añadir",
+    no_list: "Ninguna lista configurada.",
+    entity_missing: (id) => `Entidad no encontrada: ${id}`,
+    confirm_delete: (label) => `¿Eliminar esta tarea permanentemente?\n\n"${label}"`,
+    due_prefix: "Vence",
+  },
 };
 
 class HaKanbanTodoCard extends LitElementBase {
@@ -711,13 +749,25 @@ class HaKanbanTodoCard extends LitElementBase {
       _selectedCatByEntity: { type: Object },
       _holdTimer: { type: Object },
       _holdActive: { type: Boolean },
+      _dragging: { type: Boolean },
     };
   }
 
   setConfig(config) {
     if (!config.lists || !Array.isArray(config.lists) || !config.lists.length) {
-      throw new Error(UI_LABELS.fr.config_missing_lists);
+      const langGuess = (config.language || "en").toLowerCase().split(/[-_]/)[0];
+      const langKey = UI_LABELS[langGuess] ? langGuess : "en";
+      throw new Error(UI_LABELS[langKey].config_missing_lists);
     }
+
+    config.lists.forEach((list, i) => {
+      if (!list.entity || typeof list.entity !== "string") {
+        throw new Error(`ha-kanban-todo-card: lists[${i}] is missing 'entity'`);
+      }
+      if (list.layout !== undefined) {
+        console.warn(`ha-kanban-todo-card: 'layout' belongs at the top level, not under lists[${i}]`);
+      }
+    });
 
     // Layout mode: 'kanban' (default) or 'tabs' (legacy Raptor behavior)
     const layout = config.layout || "kanban";
@@ -746,6 +796,8 @@ class HaKanbanTodoCard extends LitElementBase {
     this._selectedCatByEntity = {};
     this._holdTimer = null;
     this._holdActive = false;
+    this._kanbanUiState = {};
+    this._dragging = false;
   }
 
   set hass(hass) {
@@ -1312,27 +1364,61 @@ class HaKanbanTodoCard extends LitElementBase {
         }
       }
 
+      /* SortableJS load-failure banner */
+      .load-error {
+        padding: 12px 16px;
+        background: color-mix(in srgb, var(--error-color, #ef4444) 15%, transparent);
+        border-left: 3px solid var(--error-color, #ef4444);
+        color: var(--primary-text-color);
+        font-size: 0.9em;
+        margin: 0 12px 12px;
+        border-radius: 4px;
+      }
+
+      /* Collapsible "Completed" section in each Kanban column */
+      .col-completed-toggle {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 6px 8px;
+        margin-top: 8px;
+        font-size: 0.85em;
+        color: var(--secondary-text-color);
+        cursor: pointer;
+        border-top: 1px solid var(--divider-color);
+        user-select: none;
+      }
+      .col-completed-toggle:hover {
+        color: var(--primary-text-color);
+      }
+      .col-completed {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        opacity: 0.75;
+      }
+
       /* ============ Drag-and-Drop (SortableJS) ============ */
       .kanban-col .item {
         cursor: grab;
         user-select: none;
       }
       /* Ghost = placeholder that shows where item will land */
-      .sortable-ghost {
-        opacity: 1 !important;
-        background: transparent !important;
-        border: 2px dashed var(--primary-color) !important;
-        box-shadow: none !important;
-        transform: none !important;
+      .kanban-col .item.sortable-ghost {
+        opacity: 1;
+        background: transparent;
+        border: 2px dashed var(--primary-color);
+        box-shadow: none;
+        transform: none;
       }
-      .sortable-ghost * {
-        visibility: hidden !important;
+      .kanban-col .item.sortable-ghost * {
+        visibility: hidden;
       }
       /* Drag = the item visually following the cursor */
-      .sortable-drag {
-        opacity: 0.95 !important;
+      .kanban-col .item.sortable-drag {
+        opacity: 0.95;
         transform: rotate(1deg);
-        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2) !important;
+        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
         cursor: grabbing;
       }
       .sortable-chosen {
@@ -1378,6 +1464,10 @@ class HaKanbanTodoCard extends LitElementBase {
   }
 
   _renderKanban() {
+    const errBanner = this._sortableLoadFailed
+      ? html`<div class="load-error">Drag-and-drop unavailable: SortableJS failed to load from CDN. Check your internet connection or browser CSP, then reload.</div>`
+      : "";
+
     const lists = this._config.lists;
     if (!lists?.length) {
       return html`<ha-card>${this._ui("no_list")}</ha-card>`;
@@ -1390,6 +1480,7 @@ class HaKanbanTodoCard extends LitElementBase {
         <div class="kanban-header">
           <div class="title">${title}</div>
         </div>
+        ${errBanner}
         <div
           class="kanban-grid"
           style="grid-template-columns: repeat(${lists.length}, minmax(0, 1fr));"
@@ -1424,6 +1515,12 @@ class HaKanbanTodoCard extends LitElementBase {
     const completedRaw = items.filter((it) => it.status === "completed");
     const active = this._sortItemsForList(list, activeRaw);
 
+    const showCompleted =
+      list.show_completed_in_kanban !== false && completedRaw.length > 0;
+    const completed = this._sortItemsForList(list, completedRaw);
+    const toggleKey = `show_completed_${list.entity}`;
+    const showToggle = this._kanbanUiState?.[toggleKey] === true;
+
     return html`
       <div class="kanban-col" data-entity="${list.entity}">
         <div class="col-header">
@@ -1438,8 +1535,26 @@ class HaKanbanTodoCard extends LitElementBase {
             : active.map((it) => this._renderItem(list, it))
           }
         </div>
+        ${showCompleted
+          ? html`
+            <div class="col-completed-toggle" @click=${() => this._toggleKanbanCompleted(list.entity)}>
+              <ha-icon icon="${showToggle ? 'mdi:chevron-down' : 'mdi:chevron-right'}"></ha-icon>
+              <span>${this._ui("completed")} (${completedRaw.length})</span>
+            </div>
+            ${showToggle
+              ? html`<div class="col-completed">${completed.map((it) => this._renderItem(list, it))}</div>`
+              : ""
+            }
+          `
+          : ""}
       </div>
     `;
+  }
+
+  _toggleKanbanCompleted(entityId) {
+    const key = `show_completed_${entityId}`;
+    this._kanbanUiState = { ...(this._kanbanUiState || {}), [key]: !(this._kanbanUiState?.[key]) };
+    this.requestUpdate();
   }
 
   _renderTabs() {
@@ -1724,6 +1839,13 @@ class HaKanbanTodoCard extends LitElementBase {
     }
   }
 
+  shouldUpdate(changedProps) {
+    // Block LitElement re-renders while a drag is in progress.
+    // Otherwise Sortable's DOM state can be clobbered mid-drag.
+    if (this._dragging) return false;
+    return true;
+  }
+
   disconnectedCallback() {
     if (super.disconnectedCallback) super.disconnectedCallback();
     this._destroySortables();
@@ -1735,6 +1857,8 @@ class HaKanbanTodoCard extends LitElementBase {
       Sortable = await loadSortable();
     } catch (err) {
       console.error("ha-kanban-todo-card: failed to load SortableJS", err);
+      this._sortableLoadFailed = true;
+      this.requestUpdate();
       return;
     }
     if (!Sortable) return;
@@ -1769,6 +1893,7 @@ class HaKanbanTodoCard extends LitElementBase {
         dragClass: "sortable-drag",
         filter: ".item-icon",
         preventOnFilter: false,
+        onStart: () => { this._dragging = true; },
         onEnd: (ev) => this._onSortableEnd(ev),
       });
       this._sortablesMap.set(col, instance);
@@ -1818,6 +1943,7 @@ class HaKanbanTodoCard extends LitElementBase {
       console.warn(
         "ha-kanban-todo-card: drop ignored — previous operation still in flight"
       );
+      this._dragging = false;
       return;
     }
 
@@ -1825,7 +1951,10 @@ class HaKanbanTodoCard extends LitElementBase {
     const uid = item?.dataset?.uid;
     const sourceEntity = from?.closest(".kanban-col")?.dataset?.entity;
     const targetEntity = to?.closest(".kanban-col")?.dataset?.entity;
-    if (!uid || !sourceEntity || !targetEntity) return;
+    if (!uid || !sourceEntity || !targetEntity) {
+      this._dragging = false;
+      return;
+    }
 
     const sourceItems = this._itemsByEntity[sourceEntity] || [];
     const targetItems = this._itemsByEntity[targetEntity] || [];
@@ -1836,6 +1965,7 @@ class HaKanbanTodoCard extends LitElementBase {
       sourceItems.find((i) => i.uid === uid) ||
       targetItems.find((i) => i.uid === uid);
     if (!moved) {
+      this._dragging = false;
       await Promise.all([
         this._fetchItemsFor(sourceEntity),
         sourceEntity !== targetEntity
@@ -1864,6 +1994,11 @@ class HaKanbanTodoCard extends LitElementBase {
       newPos = prevPos + 500;
     } else {
       newPos = (prevPos + nextPos) / 2;
+      if (Math.abs(newPos - prevPos) < MIN_POSITION_GAP || Math.abs(nextPos - newPos) < MIN_POSITION_GAP) {
+        // Float precision exhausted — trigger a renumber for this list.
+        this._pendingRenumber = targetEntity;
+        newPos = prevPos + MIN_POSITION_GAP; // best-effort placeholder
+      }
     }
 
     const newDesc = this._setPositionInDescription(moved.description, newPos);
@@ -1914,8 +2049,38 @@ class HaKanbanTodoCard extends LitElementBase {
         /* noop */
       }
     } finally {
+      if (this._pendingRenumber === targetEntity) {
+        this._pendingRenumber = null;
+        try {
+          await this._renumberList(targetEntity);
+        } catch (err) {
+          console.warn("ha-kanban-todo-card: renumber failed", err);
+        }
+      }
       this._dragOpInFlight = false;
+      this._dragging = false;
     }
+  }
+
+  async _renumberList(entityId) {
+    const items = this._itemsByEntity[entityId] || [];
+    const sorted = this._sortItemsForList({ sort_by: "manual" }, items);
+    for (let i = 0; i < sorted.length; i++) {
+      const newPos = (i + 1) * 1000;
+      const current = this._getItemPosition(sorted[i]);
+      if (current === newPos) continue;
+      const newDesc = this._setPositionInDescription(sorted[i].description, newPos);
+      try {
+        await this.hass.callService("todo", "update_item", {
+          entity_id: entityId,
+          item: sorted[i].uid,
+          description: newDesc,
+        });
+      } catch (err) {
+        console.warn(`ha-kanban-todo-card: renumber failed on ${sorted[i].uid}`, err);
+      }
+    }
+    await this._fetchItemsFor(entityId);
   }
 
   async _confirmDelete(list, item) {
@@ -2185,7 +2350,7 @@ window.customCards.push({
 });
 
 console.info(
-  "%cHA Kanban Todo Card%c loaded",
+  `%cHA Kanban Todo Card%c v${HA_KANBAN_TODO_CARD_VERSION}`,
   "color: white; background:#22c55e; padding:2px 6px; border-radius:4px;",
   "color:#22c55e;"
 );

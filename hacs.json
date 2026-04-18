@@ -1,5 +1,6 @@
 {
   "name": "HA Kanban Todo Card",
   "render_readme": true,
-  "filename": "ha-kanban-todo-card.js"
+  "filename": "ha-kanban-todo-card.js",
+  "homeassistant": "2023.11.0"
 }
