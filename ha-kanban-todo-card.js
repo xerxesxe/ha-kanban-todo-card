@@ -63,7 +63,7 @@ const css = LitElementBase.prototype.css;
 // Tag de suppression auto stocké dans le summary : #rtrm(start,delay)
 const AUTO_REMOVE_TAG_REGEX = /#rtrm\((\d+),(\d+)\)/;
 
-const HA_KANBAN_TODO_CARD_VERSION = "1.2.0";
+const HA_KANBAN_TODO_CARD_VERSION = "1.2.1";
 
 // Minimum gap between adjacent manual positions before we must renumber
 // (float precision exhaustion — after ~52 midpoint inserts at the same spot).
@@ -1839,12 +1839,16 @@ class HaKanbanTodoCard extends LitElementBase {
     }
   }
 
-  shouldUpdate(changedProps) {
-    // Block LitElement re-renders while a drag is in progress.
-    // Otherwise Sortable's DOM state can be clobbered mid-drag.
-    if (this._dragging) return false;
-    return true;
-  }
+  // NOTE: We intentionally do NOT override shouldUpdate to block re-renders
+  // during drag. Doing so causes a deadlock: post-drop fetch updates
+  // _itemsByEntity (property change queued), but shouldUpdate=false silently
+  // discards the render. When _dragging flips false, there's no pending
+  // update to re-queue, so the DOM stays stale. On the next drop, DOM
+  // carries a uid that HA has already re-keyed → "Eintrag nicht gefunden".
+  //
+  // The Map-based Sortable binding (see _initSortables) already makes
+  // Sortable instances survive LitElement re-renders. The _dragging flag
+  // is retained only for defensive read access; it no longer gates updates.
 
   disconnectedCallback() {
     if (super.disconnectedCallback) super.disconnectedCallback();
@@ -2059,6 +2063,10 @@ class HaKanbanTodoCard extends LitElementBase {
       }
       this._dragOpInFlight = false;
       this._dragging = false;
+      // Force a render now that drag is done — ensures DOM data-uid
+      // attributes reflect the fresh uids from post-drop fetch before
+      // the user can start another drag.
+      this.requestUpdate();
     }
   }
 
