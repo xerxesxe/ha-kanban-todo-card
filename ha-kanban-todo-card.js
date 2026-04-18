@@ -1283,6 +1283,26 @@ class HaKanbanTodoCard extends LitElementBase {
         background: var(--primary-color);
         background-color: color-mix(in srgb, var(--primary-color) 10%, transparent);
       }
+
+      /* ============ Kanban item cards ============ */
+      /* In Kanban mode, each item is its own visually separated card. */
+      .kanban-col .item {
+        background: var(--card-background-color, #ffffff);
+        border-radius: 8px;
+        padding: 10px 12px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08),
+                    0 1px 3px rgba(0, 0, 0, 0.05);
+        border: 1px solid var(--divider-color);
+        transition: transform 0.1s ease, box-shadow 0.1s ease;
+      }
+      .kanban-col .item:hover {
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.12),
+                    0 3px 6px rgba(0, 0, 0, 0.08);
+        transform: translateY(-1px);
+      }
+      .kanban-col .item-label {
+        line-height: 1.35;
+      }
     `;
   }
 
