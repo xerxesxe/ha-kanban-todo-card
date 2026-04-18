@@ -1266,6 +1266,23 @@ class HaKanbanTodoCard extends LitElementBase {
           grid-template-columns: 1fr !important;
         }
       }
+
+      /* ============ Drag-and-Drop ============ */
+      .item[draggable="true"] {
+        cursor: grab;
+      }
+      .item[draggable="true"]:active {
+        cursor: grabbing;
+      }
+      .item.dragging {
+        opacity: 0.4;
+      }
+      .col-items.drop-target {
+        outline: 2px dashed var(--primary-color);
+        outline-offset: -4px;
+        background: var(--primary-color);
+        background-color: color-mix(in srgb, var(--primary-color) 10%, transparent);
+      }
     `;
   }
 
@@ -1335,7 +1352,12 @@ class HaKanbanTodoCard extends LitElementBase {
           <span class="col-count">${active.length}</span>
         </div>
         ${this._renderAddRow(list)}
-        <div class="col-items">
+        <div
+          class="col-items"
+          @dragover=${(ev) => this._onDragOver(ev)}
+          @dragleave=${(ev) => this._onDragLeave(ev)}
+          @drop=${(ev) => this._onDrop(ev, list.entity)}
+        >
           ${active.length === 0
             ? html`<div class="empty">${this._ui("empty_active")}</div>`
             : active.map((it) => this._renderItem(list, it))
@@ -1550,6 +1572,7 @@ class HaKanbanTodoCard extends LitElementBase {
   }
 
   _renderItem(list, item, completed) {
+    const isKanban = (this._config.layout || "kanban") === "kanban";
     const rawSummary = item.summary || "";
     const withoutAuto = this._stripAutoRemoveMeta(rawSummary);
     const cats = this._getCategories(list);
@@ -1564,7 +1587,12 @@ class HaKanbanTodoCard extends LitElementBase {
     const dueText = showDue ? this._formatDue(item) : "";
 
     return html`
-      <div class="item">
+      <div
+        class="item"
+        draggable="${isKanban ? "true" : "false"}"
+        @dragstart=${isKanban ? (ev) => this._onDragStart(ev, list.entity, item) : null}
+        @dragend=${isKanban ? (ev) => this._onDragEnd(ev) : null}
+      >
         <div
           class="item-icon"
           @click=${() => this._toggleItem(list, item)}
@@ -1610,6 +1638,93 @@ class HaKanbanTodoCard extends LitElementBase {
   _onItemPointerUp() {
     if (this._holdTimer) clearTimeout(this._holdTimer);
     this._holdTimer = null;
+  }
+
+  // ------------------ DRAG & DROP (Kanban only) ------------------
+
+  _onDragStart(ev, sourceEntity, item) {
+    ev.dataTransfer.effectAllowed = "move";
+    ev.dataTransfer.setData(
+      "application/x-ha-kanban-todo",
+      JSON.stringify({
+        sourceEntity,
+        uid: item.uid,
+        summary: item.summary,
+        description: item.description || "",
+        status: item.status,
+      })
+    );
+    // Fallback MIME so browsers that ignore custom types still populate data
+    ev.dataTransfer.setData("text/plain", item.summary || "");
+    ev.currentTarget.classList.add("dragging");
+  }
+
+  _onDragEnd(ev) {
+    ev.currentTarget.classList.remove("dragging");
+  }
+
+  _onDragOver(ev) {
+    ev.preventDefault(); // allow drop
+    ev.dataTransfer.dropEffect = "move";
+    ev.currentTarget.classList.add("drop-target");
+  }
+
+  _onDragLeave(ev) {
+    ev.currentTarget.classList.remove("drop-target");
+  }
+
+  async _onDrop(ev, targetEntity) {
+    ev.preventDefault();
+    ev.currentTarget.classList.remove("drop-target");
+
+    const raw = ev.dataTransfer.getData("application/x-ha-kanban-todo");
+    if (!raw) return;
+
+    let payload;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      return;
+    }
+
+    if (!payload || !payload.sourceEntity || payload.sourceEntity === targetEntity) {
+      return; // noop if dropped on same column
+    }
+
+    // Optimistic UI: move item locally first
+    const srcItems = [...(this._itemsByEntity[payload.sourceEntity] || [])];
+    const idx = srcItems.findIndex((i) => i.uid === payload.uid);
+    if (idx < 0) return;
+    const [movedItem] = srcItems.splice(idx, 1);
+    const tgtItems = [...(this._itemsByEntity[targetEntity] || []), movedItem];
+
+    this._itemsByEntity = {
+      ...this._itemsByEntity,
+      [payload.sourceEntity]: srcItems,
+      [targetEntity]: tgtItems,
+    };
+    this.requestUpdate();
+
+    // Persist via HA service calls
+    try {
+      await this.hass.callService("todo", "remove_item", {
+        entity_id: payload.sourceEntity,
+        item: payload.uid,
+      });
+      await this.hass.callService("todo", "add_item", {
+        entity_id: targetEntity,
+        item: payload.summary,
+        ...(payload.description ? { description: payload.description } : {}),
+      });
+      // Refresh both lists so uid of the new item is correct
+      await this._fetchItemsFor(payload.sourceEntity);
+      await this._fetchItemsFor(targetEntity);
+    } catch (err) {
+      console.error("ha-kanban-todo-card: DnD failed, rolling back.", err);
+      // Rollback: re-fetch both lists to restore correct state
+      await this._fetchItemsFor(payload.sourceEntity);
+      await this._fetchItemsFor(targetEntity);
+    }
   }
 
   async _confirmDelete(list, item) {
