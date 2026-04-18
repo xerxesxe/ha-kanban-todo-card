@@ -708,6 +708,14 @@ class HaKanbanTodoCard extends LitElementBase {
       throw new Error(UI_LABELS.fr.config_missing_lists);
     }
 
+    // Layout mode: 'kanban' (default) or 'tabs' (legacy Raptor behavior)
+    const layout = config.layout || "kanban";
+    if (layout !== "kanban" && layout !== "tabs") {
+      throw new Error(
+        `ha-kanban-todo-card: layout must be 'kanban' or 'tabs', got '${layout}'`
+      );
+    }
+
     const rawLang = config.language || config.languages || "en";
     const lang = String(rawLang).toLowerCase().split("-")[0];
     const langKey = UI_LABELS[lang] ? lang : "en";
@@ -718,6 +726,7 @@ class HaKanbanTodoCard extends LitElementBase {
       language: rawLang,
       lists: config.lists,
       progress_colors: config.progress_colors || DEFAULT_PROGRESS_COLORS,
+      layout,
     };
 
     this._activeIndex = 0;
@@ -1202,6 +1211,21 @@ class HaKanbanTodoCard extends LitElementBase {
   // ------------------ RENDER ------------------
 
   render() {
+    if (!this.hass || !this._config) return html``;
+    const layout = this._config.layout || "kanban";
+    if (layout === "kanban") {
+      return this._renderKanban();
+    }
+    return this._renderTabs();
+  }
+
+  _renderKanban() {
+    // Placeholder: actual Kanban layout implemented in Task 5.
+    // Falling back to tabs so the card stays usable during incremental development.
+    return this._renderTabs();
+  }
+
+  _renderTabs() {
     if (!this.hass || !this._config) return html``;
 
     const lists = this._config.lists;
