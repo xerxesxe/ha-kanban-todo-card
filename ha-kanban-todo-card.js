@@ -1739,38 +1739,61 @@ class HaKanbanTodoCard extends LitElementBase {
     }
     if (!Sortable) return;
 
-    this._destroySortables();
-    this._sortables = [];
+    // Use Map: DOM node → Sortable instance. Survives LitElement re-renders
+    // without destroying active Sortables mid-drag. Only new columns get
+    // new instances; orphaned instances (column removed from DOM) are cleaned up.
+    if (!this._sortablesMap) this._sortablesMap = new Map();
 
-    const cols = this.renderRoot?.querySelectorAll?.(".col-items");
-    if (!cols || !cols.length) return;
+    const cols = Array.from(
+      this.renderRoot?.querySelectorAll?.(".col-items") || []
+    );
+    const seen = new Set(cols);
 
+    // Attach to new columns
     cols.forEach((col) => {
+      if (this._sortablesMap.has(col)) return;
       const instance = new Sortable(col, {
         group: "ha-kanban-todos",
         animation: 180,
-        // Native HTML5 DnD (no forceFallback) — works reliably in Shadow DOM
-        // contexts like Home Assistant Lovelace. Touch is supported via
-        // SortableJS's internal pointer polyfill.
         supportPointer: true,
-        // Touch: require 150ms long-press before drag starts, so regular taps
-        // still trigger click/toggle handlers.
         delay: 150,
         delayOnTouchOnly: true,
         touchStartThreshold: 5,
         ghostClass: "sortable-ghost",
         chosenClass: "sortable-chosen",
         dragClass: "sortable-drag",
-        // Don't start drag if user clicked the complete icon.
         filter: ".item-icon",
         preventOnFilter: false,
         onEnd: (ev) => this._onSortableEnd(ev),
       });
-      this._sortables.push(instance);
+      this._sortablesMap.set(col, instance);
     });
+
+    // Clean up orphans (column removed from DOM, e.g. layout switch)
+    for (const [col, instance] of this._sortablesMap.entries()) {
+      if (!seen.has(col)) {
+        try {
+          instance.destroy();
+        } catch (_e) {
+          /* noop */
+        }
+        this._sortablesMap.delete(col);
+      }
+    }
   }
 
   _destroySortables() {
+    if (this._sortablesMap) {
+      for (const instance of this._sortablesMap.values()) {
+        try {
+          instance.destroy();
+        } catch (_e) {
+          /* noop */
+        }
+      }
+      this._sortablesMap.clear();
+    }
+    // Legacy cleanup for any older-style array tracking
     if (this._sortables && this._sortables.length) {
       this._sortables.forEach((s) => {
         try {
@@ -1779,8 +1802,8 @@ class HaKanbanTodoCard extends LitElementBase {
           /* noop */
         }
       });
+      this._sortables = [];
     }
-    this._sortables = [];
   }
 
   async _onSortableEnd(ev) {
