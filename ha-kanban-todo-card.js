@@ -63,7 +63,7 @@ const css = LitElementBase.prototype.css;
 // Tag de suppression auto stocké dans le summary : #rtrm(start,delay)
 const AUTO_REMOVE_TAG_REGEX = /#rtrm\((\d+),(\d+)\)/;
 
-const HA_KANBAN_TODO_CARD_VERSION = "1.4.2";
+const HA_KANBAN_TODO_CARD_VERSION = "1.5.0";
 
 // Minimum gap between adjacent manual positions before we must renumber
 // (float precision exhaustion — after ~52 midpoint inserts at the same spot).
@@ -694,6 +694,14 @@ const UI_LABELS = {
     edit_save: "Save",
     edit_cancel: "Cancel",
     edit_delete: "Delete",
+    edit_due: "Due date",
+    edit_due_clear: "Clear",
+    due_today: "Today",
+    due_tomorrow: "Tomorrow",
+    due_yesterday: "Yesterday",
+    due_in_n_days: "in {n} days",
+    due_n_days_ago: "{n} days ago",
+    filter_placeholder: "Filter…",
   },
   fr: {
     config_missing_lists:
@@ -721,6 +729,14 @@ const UI_LABELS = {
     edit_save: "Enregistrer",
     edit_cancel: "Annuler",
     edit_delete: "Supprimer",
+    edit_due: "Date d'échéance",
+    edit_due_clear: "Effacer",
+    due_today: "Aujourd'hui",
+    due_tomorrow: "Demain",
+    due_yesterday: "Hier",
+    due_in_n_days: "dans {n} jours",
+    due_n_days_ago: "il y a {n} jours",
+    filter_placeholder: "Filtrer…",
   },
   de: {
     config_missing_lists: "HA Kanban Todo Card benötigt ein 'lists'-Feld.",
@@ -746,6 +762,14 @@ const UI_LABELS = {
     edit_save: "Speichern",
     edit_cancel: "Abbrechen",
     edit_delete: "Löschen",
+    edit_due: "Fälligkeitsdatum",
+    edit_due_clear: "Löschen",
+    due_today: "Heute",
+    due_tomorrow: "Morgen",
+    due_yesterday: "Gestern",
+    due_in_n_days: "in {n} Tagen",
+    due_n_days_ago: "vor {n} Tagen",
+    filter_placeholder: "Filtern…",
   },
   es: {
     config_missing_lists: "HA Kanban Todo Card necesita un campo 'lists'.",
@@ -771,6 +795,14 @@ const UI_LABELS = {
     edit_save: "Guardar",
     edit_cancel: "Cancelar",
     edit_delete: "Eliminar",
+    edit_due: "Fecha de vencimiento",
+    edit_due_clear: "Borrar",
+    due_today: "Hoy",
+    due_tomorrow: "Mañana",
+    due_yesterday: "Ayer",
+    due_in_n_days: "en {n} días",
+    due_n_days_ago: "hace {n} días",
+    filter_placeholder: "Filtrar…",
   },
 };
 
@@ -788,6 +820,7 @@ class HaKanbanTodoCard extends LitElementBase {
       _holdActive: { type: Boolean },
       _dragging: { type: Boolean },
       _editingItem: { type: Object },
+      _filterText: { type: String },
     };
   }
 
@@ -837,6 +870,7 @@ class HaKanbanTodoCard extends LitElementBase {
     this._holdActive = false;
     this._kanbanUiState = {};
     this._dragging = false;
+    this._filterText = "";
     // Verbose console logging for DnD — enable via `debug: true` in card config.
     this._kanbanDebug = !!config.debug;
   }
@@ -1334,24 +1368,65 @@ class HaKanbanTodoCard extends LitElementBase {
         letter-spacing: 0.03em;
       }
 
-      /* due badge */
+      /* due badge — color-coded urgency */
       .due-pill {
-        padding: 2px 6px;
-        border-radius: 999px;
-        font-size: 0.7rem;
+        font-size: 0.72em;
         font-weight: 600;
-        color: var(--primary-text-color);
-        background: rgba(0, 0, 0, 0.08);
-        letter-spacing: 0.01em;
+        padding: 2px 8px;
+        border-radius: 999px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        display: inline-block;
+      }
+      .due-pill-overdue {
+        background: var(--error-color, #ef4444);
+        color: white;
+      }
+      .due-pill-today {
+        background: #f97316;
+        color: white;
+      }
+      .due-pill-soon {
+        background: #eab308;
+        color: black;
+      }
+      .due-pill-future {
+        background: var(--secondary-background-color);
+        color: var(--secondary-text-color);
+        border: 1px solid var(--divider-color);
+      }
+
+      .edit-due-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
       }
 
       /* ============ Kanban layout ============ */
       .kanban-header {
         padding: 12px 16px 8px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
       }
       .kanban-header .title {
         font-weight: 600;
         font-size: 1.2em;
+      }
+      .kanban-filter {
+        font: inherit;
+        padding: 6px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--divider-color);
+        background: var(--secondary-background-color);
+        color: var(--primary-text-color);
+        width: 240px;
+        max-width: 50%;
+      }
+      .kanban-filter:focus {
+        outline: 2px solid var(--primary-color);
+        outline-offset: -2px;
       }
       .kanban-grid {
         display: grid;
@@ -1583,6 +1658,28 @@ class HaKanbanTodoCard extends LitElementBase {
         transition: background 0.1s ease;
       }
 
+      .edit-md-preview {
+        background: var(--secondary-background-color);
+        border-radius: 6px;
+        padding: 8px 12px;
+        font-size: 0.9em;
+        color: var(--secondary-text-color);
+        margin-bottom: 4px;
+        border-left: 3px solid var(--primary-color);
+        max-height: 200px;
+        overflow-y: auto;
+      }
+      .edit-md-preview h3 { margin: 6px 0; font-size: 1em; }
+      .edit-md-preview p { margin: 4px 0; }
+      .edit-md-preview ul { margin: 4px 0; padding-left: 20px; }
+      .edit-md-preview code {
+        font-family: monospace;
+        background: var(--code-editor-background, rgba(0,0,0,0.06));
+        padding: 1px 4px;
+        border-radius: 3px;
+      }
+      .edit-md-preview a { color: var(--primary-color); }
+
       /* ============ Kanban item cards ============ */
       /* In Kanban mode, each item is its own visually separated card. */
       .kanban-col .item {
@@ -1632,6 +1729,13 @@ class HaKanbanTodoCard extends LitElementBase {
       <ha-card>
         <div class="kanban-header">
           <div class="title">${title}</div>
+          <input
+            class="kanban-filter"
+            type="search"
+            placeholder="${this._ui("filter_placeholder")}"
+            .value=${this._filterText || ""}
+            @input=${(ev) => (this._filterText = ev.target.value)}
+          />
         </div>
         ${errBanner}
         <div
@@ -1675,28 +1779,45 @@ class HaKanbanTodoCard extends LitElementBase {
     const toggleKey = `show_completed_${list.entity}`;
     const showToggle = this._kanbanUiState?.[toggleKey] === true;
 
+    // Filter by search text (case-insensitive across summary + description)
+    const filterText = (this._filterText || "").trim().toLowerCase();
+    const matchesFilter = (item) => {
+      if (!filterText) return true;
+      const haystack = [
+        item.summary || "",
+        item.description || "",
+      ].join(" ").toLowerCase();
+      return haystack.includes(filterText);
+    };
+    const visibleActive = active.filter(matchesFilter);
+    const visibleCompleted = completed.filter(matchesFilter);
+
+    const countLabel = filterText
+      ? `${visibleActive.length}/${active.length}`
+      : `${visibleActive.length}`;
+
     return html`
       <div class="kanban-col" data-entity="${list.entity}">
         <div class="col-header">
           ${list.icon ? html`<ha-icon icon="${list.icon}"></ha-icon>` : ""}
           <span class="col-label">${list.label || list.entity}</span>
-          <span class="col-count">${active.length}</span>
+          <span class="col-count">${countLabel}</span>
         </div>
         ${this._renderAddRow(list)}
         <div class="col-items">
-          ${active.length === 0
+          ${visibleActive.length === 0
             ? html`<div class="empty">${this._ui("empty_active")}</div>`
-            : active.map((it) => this._renderItem(list, it))
+            : visibleActive.map((it) => this._renderItem(list, it))
           }
         </div>
         ${showCompleted
           ? html`
             <div class="col-completed-toggle" @click=${() => this._toggleKanbanCompleted(list.entity)}>
               <ha-icon icon="${showToggle ? 'mdi:chevron-down' : 'mdi:chevron-right'}"></ha-icon>
-              <span>${this._ui("completed")} (${completedRaw.length})</span>
+              <span>${this._ui("completed")} (${filterText ? `${visibleCompleted.length}/${completedRaw.length}` : completedRaw.length})</span>
             </div>
             ${showToggle
-              ? html`<div class="col-completed">${completed.map((it) => this._renderItem(list, it))}</div>`
+              ? html`<div class="col-completed">${visibleCompleted.map((it) => this._renderItem(list, it))}</div>`
               : ""
             }
           `
@@ -1936,8 +2057,8 @@ class HaKanbanTodoCard extends LitElementBase {
     const icon = cat?.icon || "mdi:checkbox-blank-circle";
     const catLabel = cat ? this._getCategoryLabel(cat) : "";
 
-    const showDue = list.show_due_date === true;
-    const dueText = showDue ? this._formatDue(item) : "";
+    const dueDate = item.due || item.due_date;
+    const dueInfo = dueDate ? this._formatDueInfo(dueDate) : null;
 
     return html`
       <div
@@ -1970,14 +2091,105 @@ class HaKanbanTodoCard extends LitElementBase {
               </div>`
             : ""}
 
-          ${dueText
-            ? html`<div class="due-pill">
-                ${this._ui("due_prefix")}: ${dueText}
+          ${dueInfo
+            ? html`<div class="due-pill due-pill-${dueInfo.urgency}">
+                ${dueInfo.label}
               </div>`
             : ""}
         </div>
       </div>
     `;
+  }
+
+  _formatDueInfo(dateStr) {
+    if (!dateStr) return null;
+    const d = new Date(dateStr);
+    if (isNaN(d)) return null;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const target = new Date(d);
+    target.setHours(0, 0, 0, 0);
+    const diffDays = Math.round((target - today) / 86400000);
+    let urgency = "future";
+    if (diffDays < 0) urgency = "overdue";
+    else if (diffDays === 0) urgency = "today";
+    else if (diffDays <= 3) urgency = "soon";
+
+    const lang = (this._config.language || "en").toLowerCase().slice(0, 2);
+    const ui = (k) => this._ui(k);
+    let label;
+    if (diffDays === 0) label = ui("due_today");
+    else if (diffDays === 1) label = ui("due_tomorrow");
+    else if (diffDays === -1) label = ui("due_yesterday");
+    else if (diffDays > 1 && diffDays <= 7) label = ui("due_in_n_days").replace("{n}", diffDays);
+    else if (diffDays < -1 && diffDays >= -7) label = ui("due_n_days_ago").replace("{n}", Math.abs(diffDays));
+    else {
+      label = d.toLocaleDateString(lang, { month: "short", day: "numeric" });
+    }
+    return { label, urgency, dateStr };
+  }
+
+  _renderMarkdown(text) {
+    if (!text) return "";
+    // Minimal Markdown: paragraphs, **bold**, *italic*, `code`,
+    // [link](url), - bullet, ## heading.
+    // Safety: we escape every line of user input BEFORE layering only our own
+    // safe whitelist of tags on top, then parse via DOMParser so lit-html
+    // sees a real DOM fragment. No raw user content ever reaches an HTML
+    // parser unescaped.
+    const escape = (s) => s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    const lines = text.split("\n");
+    const out = [];
+    let inList = false;
+    for (const raw of lines) {
+      const line = raw;
+      if (/^- /.test(line)) {
+        if (!inList) { out.push("<ul>"); inList = true; }
+        let inner = escape(line.slice(2));
+        inner = this._inlineMd(inner);
+        out.push(`<li>${inner}</li>`);
+      } else {
+        if (inList) { out.push("</ul>"); inList = false; }
+        if (/^## /.test(line)) {
+          out.push(`<h3>${this._inlineMd(escape(line.slice(3)))}</h3>`);
+        } else if (line.trim() === "") {
+          out.push("<br/>");
+        } else {
+          out.push(`<p>${this._inlineMd(escape(line))}</p>`);
+        }
+      }
+    }
+    if (inList) out.push("</ul>");
+    const safeHtml = out.join("");
+    // DOMParser is the safest way to materialize our own pre-escaped HTML
+    // into a DocumentFragment without touching innerHTML on a live element.
+    const doc = new DOMParser().parseFromString(
+      `<div id="r">${safeHtml}</div>`, "text/html"
+    );
+    const root = doc.getElementById("r");
+    const frag = document.createDocumentFragment();
+    if (root) {
+      while (root.firstChild) frag.appendChild(root.firstChild);
+    }
+    return frag;
+  }
+
+  _inlineMd(s) {
+    // **bold**
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    // *italic*
+    s = s.replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>");
+    // `code`
+    s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+    // [text](url)
+    s = s.replace(
+      /\[([^\]]+)\]\(([^)]+)\)/g,
+      '<a href="$2" target="_blank" rel="noopener">$1</a>'
+    );
+    return s;
   }
 
   _openItemEditor(ev, list, item) {
@@ -1996,6 +2208,22 @@ class HaKanbanTodoCard extends LitElementBase {
     const activeKeys = new Set(
       cats.filter((c) => c.match && summary.includes(c.match)).map((c) => c.key)
     );
+    // Normalize due to ISO yyyy-mm-dd for the <input type="date">.
+    // HA's local_todo returns either `due` or `due_date`; preserve which one
+    // was present so we can mirror it on save.
+    const rawDue = item.due || item.due_date || "";
+    let isoDue = "";
+    if (rawDue) {
+      const d = new Date(rawDue);
+      if (!isNaN(d)) {
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        const dd = String(d.getDate()).padStart(2, "0");
+        isoDue = `${yyyy}-${mm}-${dd}`;
+      } else if (/^\d{4}-\d{2}-\d{2}/.test(rawDue)) {
+        isoDue = rawDue.slice(0, 10);
+      }
+    }
     this._editingItem = {
       entity: list.entity,
       uid: item.uid,
@@ -2003,7 +2231,8 @@ class HaKanbanTodoCard extends LitElementBase {
       description: visibleDesc,
       rawDescription: rawDesc,
       status: item.status || "needs_action",
-      due: item.due || item.due_date || "",
+      due: isoDue,
+      dueField: item.due_date ? "due_date" : (item.due ? "due" : "due_date"),
       // Snapshot of category list + currently-active keys for the dialog
       cats,
       activeKeys,
@@ -2060,12 +2289,30 @@ class HaKanbanTodoCard extends LitElementBase {
             : ""}
 
           <label class="edit-label">${this._ui("edit_description")}</label>
+          ${e.description
+            ? html`<div class="edit-md-preview">${this._renderMarkdown(e.description)}</div>`
+            : ""}
           <textarea
             class="edit-textarea"
             rows="4"
             .value=${e.description}
             @input=${(ev) => (this._editingItem.description = ev.target.value)}
           ></textarea>
+
+          <label class="edit-label">${this._ui("edit_due")}</label>
+          <div class="edit-due-row">
+            <input
+              class="edit-input"
+              type="date"
+              .value=${e.due || ""}
+              @input=${(ev) => (this._editingItem.due = ev.target.value)}
+            />
+            ${e.due
+              ? html`<button class="edit-btn" @click=${() => {
+                  this._editingItem = { ...this._editingItem, due: "" };
+                }}>${this._ui("edit_due_clear")}</button>`
+              : ""}
+          </div>
 
           <label class="edit-label">
             <input
@@ -2137,14 +2384,27 @@ class HaKanbanTodoCard extends LitElementBase {
         finalSummary = `${finalSummary} ${tagsToAdd.join(" ")}`.trim();
       }
     }
+    const updatePayload = {
+      entity_id: e.entity,
+      item: e.uid,
+      rename: finalSummary,
+      status: e.status,
+      description: finalDesc,
+    };
+    // HA local_todo accepts `due_date` (yyyy-mm-dd). If empty/falsy, omit so
+    // existing date remains; clearing via update_item is not consistently
+    // supported across HA todo backends — log a warning.
+    if (e.due) {
+      updatePayload.due_date = e.due;
+    } else {
+      // User may have cleared the date — try sending null but warn that
+      // some backends will silently keep the previous value.
+      console.warn(
+        "ha-kanban-todo-card: clearing due_date is not reliably supported by HA todo backends; existing value may persist"
+      );
+    }
     try {
-      await this.hass.callService("todo", "update_item", {
-        entity_id: e.entity,
-        item: e.uid,
-        rename: finalSummary,
-        status: e.status,
-        description: finalDesc,
-      });
+      await this.hass.callService("todo", "update_item", updatePayload);
       await this._fetchItemsFor(e.entity);
     } catch (err) {
       console.error("ha-kanban-todo-card: edit save failed", err);
