@@ -63,7 +63,7 @@ const css = LitElementBase.prototype.css;
 // Tag de suppression auto stocké dans le summary : #rtrm(start,delay)
 const AUTO_REMOVE_TAG_REGEX = /#rtrm\((\d+),(\d+)\)/;
 
-const HA_KANBAN_TODO_CARD_VERSION = "1.3.0";
+const HA_KANBAN_TODO_CARD_VERSION = "1.3.1";
 
 // Minimum gap between adjacent manual positions before we must renumber
 // (float precision exhaustion — after ~52 midpoint inserts at the same spot).
@@ -685,6 +685,7 @@ const UI_LABELS = {
     entity_missing: (id) => `Entity not found: ${id}`,
     confirm_delete: (label) => `Permanently delete this task?\n\n"${label}"`,
     due_prefix: "Due",
+    edit_hint: "Click to open the list dialog for editing",
   },
   fr: {
     config_missing_lists:
@@ -703,6 +704,7 @@ const UI_LABELS = {
     confirm_delete: (label) =>
       `Supprimer définitivement la tâche :\n\n"${label}" ?`,
     due_prefix: "Échéance",
+    edit_hint: "Cliquer pour ouvrir le dialogue de la liste",
   },
   de: {
     config_missing_lists: "HA Kanban Todo Card benötigt ein 'lists'-Feld.",
@@ -719,6 +721,7 @@ const UI_LABELS = {
     entity_missing: (id) => `Entität nicht gefunden: ${id}`,
     confirm_delete: (label) => `Diese Aufgabe dauerhaft löschen?\n\n"${label}"`,
     due_prefix: "Fällig",
+    edit_hint: "Klicken zum Öffnen des Listen-Dialogs",
   },
   es: {
     config_missing_lists: "HA Kanban Todo Card necesita un campo 'lists'.",
@@ -735,6 +738,7 @@ const UI_LABELS = {
     entity_missing: (id) => `Entidad no encontrada: ${id}`,
     confirm_delete: (label) => `¿Eliminar esta tarea permanentemente?\n\n"${label}"`,
     due_prefix: "Vence",
+    edit_hint: "Pulsa para abrir el diálogo de la lista",
   },
 };
 
@@ -1274,6 +1278,7 @@ class HaKanbanTodoCard extends LitElementBase {
         flex-wrap: wrap;
         align-items: center;
         gap: 6px;
+        cursor: pointer;
       }
       .item-label {
         font-size: 0.92rem;
@@ -1793,7 +1798,11 @@ class HaKanbanTodoCard extends LitElementBase {
           <ha-icon .icon=${icon} style="color:${colors.iconColor};"></ha-icon>
         </div>
 
-        <div class="item-main">
+        <div
+          class="item-main"
+          @click=${(e) => this._openItemEditor(e, list, item)}
+          title="${this._ui("edit_hint")}"
+        >
           <div class="item-label ${completed ? "completed" : ""}">
             ${labelText}
           </div>
@@ -1812,6 +1821,22 @@ class HaKanbanTodoCard extends LitElementBase {
         </div>
       </div>
     `;
+  }
+
+  _openItemEditor(ev, list, item) {
+    // Ignore clicks that come right after a drag (Sortable also fires
+    // a click via the body when the drag delay expires below threshold).
+    if (this._dragOpInFlight || this._dragging) return;
+    ev.stopPropagation();
+    // Fire HA's hass-more-info — shows the entity dialog where the user
+    // can edit individual items. This is what the native todo-list card
+    // does too; HA owns the edit UI so we don't have to build a dialog.
+    const event = new CustomEvent("hass-more-info", {
+      detail: { entityId: list.entity },
+      bubbles: true,
+      composed: true,
+    });
+    this.dispatchEvent(event);
   }
 
   _onItemPointerDown(e, list, item) {
