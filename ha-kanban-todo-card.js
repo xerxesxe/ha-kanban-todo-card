@@ -63,7 +63,7 @@ const css = LitElementBase.prototype.css;
 // Tag de suppression auto stocké dans le summary : #rtrm(start,delay)
 const AUTO_REMOVE_TAG_REGEX = /#rtrm\((\d+),(\d+)\)/;
 
-const HA_KANBAN_TODO_CARD_VERSION = "1.4.1";
+const HA_KANBAN_TODO_CARD_VERSION = "1.4.2";
 
 // Minimum gap between adjacent manual positions before we must renumber
 // (float precision exhaustion — after ~52 midpoint inserts at the same spot).
@@ -690,6 +690,7 @@ const UI_LABELS = {
     edit_summary: "Title",
     edit_description: "Description",
     edit_completed: "Completed",
+    edit_labels: "Labels",
     edit_save: "Save",
     edit_cancel: "Cancel",
     edit_delete: "Delete",
@@ -716,6 +717,7 @@ const UI_LABELS = {
     edit_summary: "Titre",
     edit_description: "Description",
     edit_completed: "Terminée",
+    edit_labels: "Étiquettes",
     edit_save: "Enregistrer",
     edit_cancel: "Annuler",
     edit_delete: "Supprimer",
@@ -740,6 +742,7 @@ const UI_LABELS = {
     edit_summary: "Titel",
     edit_description: "Beschreibung",
     edit_completed: "Erledigt",
+    edit_labels: "Labels",
     edit_save: "Speichern",
     edit_cancel: "Abbrechen",
     edit_delete: "Löschen",
@@ -764,6 +767,7 @@ const UI_LABELS = {
     edit_summary: "Título",
     edit_description: "Descripción",
     edit_completed: "Completada",
+    edit_labels: "Etiquetas",
     edit_save: "Guardar",
     edit_cancel: "Cancelar",
     edit_delete: "Eliminar",
@@ -1561,6 +1565,23 @@ class HaKanbanTodoCard extends LitElementBase {
       .edit-btn-danger:hover {
         background: color-mix(in srgb, var(--error-color, #ef4444) 15%, transparent);
       }
+      .edit-labels {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .edit-label-chip {
+        font: inherit;
+        font-size: 0.8em;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: 2px solid;
+        cursor: pointer;
+        transition: background 0.1s ease;
+      }
 
       /* ============ Kanban item cards ============ */
       /* In Kanban mode, each item is its own visually separated card. */
@@ -1960,27 +1981,32 @@ class HaKanbanTodoCard extends LitElementBase {
   }
 
   _openItemEditor(ev, list, item) {
-    // Ignore clicks that come right after a drag.
     if (this._dragOpInFlight || this._dragging) return;
     ev.stopPropagation();
-    // Open our own inline dialog. HA's per-item editor module
-    // (dialog-todo-item-editor) is lazy-loaded and not available unless
-    // the user has opened a native todo card before, so we ship our own.
     const rawDesc = item.description || "";
-    // Strip our internal `position:` line from the user-facing textarea.
     const visibleDesc = rawDesc
       .split("\n")
       .filter((l) => !/^\s*position:\s*-?\d+(?:\.\d+)?\s*$/.test(l))
       .join("\n")
       .trim();
+    // Detect which categories are currently active by scanning the summary
+    // for hashtag matches.
+    const cats = this._getCategories(list);
+    const summary = item.summary || "";
+    const activeKeys = new Set(
+      cats.filter((c) => c.match && summary.includes(c.match)).map((c) => c.key)
+    );
     this._editingItem = {
       entity: list.entity,
       uid: item.uid,
-      summary: item.summary || "",
+      summary,
       description: visibleDesc,
       rawDescription: rawDesc,
       status: item.status || "needs_action",
       due: item.due || item.due_date || "",
+      // Snapshot of category list + currently-active keys for the dialog
+      cats,
+      activeKeys,
     };
   }
 
@@ -2005,6 +2031,33 @@ class HaKanbanTodoCard extends LitElementBase {
             .value=${e.summary}
             @input=${(ev) => (this._editingItem.summary = ev.target.value)}
           />
+
+          ${e.cats && e.cats.length
+            ? html`
+                <label class="edit-label">${this._ui("edit_labels")}</label>
+                <div class="edit-labels">
+                  ${e.cats.map((cat) => {
+                    const active = e.activeKeys.has(cat.key);
+                    const bg = active
+                      ? cat.color_on || cat.color || "#6b7280"
+                      : "transparent";
+                    const border = cat.color_on || cat.color || "#6b7280";
+                    const fg = active ? "white" : border;
+                    const label = this._getCategoryLabel(cat);
+                    return html`
+                      <button
+                        type="button"
+                        class="edit-label-chip"
+                        style="background:${bg};border-color:${border};color:${fg};"
+                        @click=${() => this._toggleEditingLabel(cat.key)}
+                      >
+                        ${label}
+                      </button>
+                    `;
+                  })}
+                </div>
+              `
+            : ""}
 
           <label class="edit-label">${this._ui("edit_description")}</label>
           <textarea
@@ -2043,6 +2096,15 @@ class HaKanbanTodoCard extends LitElementBase {
     `;
   }
 
+  _toggleEditingLabel(catKey) {
+    if (!this._editingItem) return;
+    const next = new Set(this._editingItem.activeKeys);
+    if (next.has(catKey)) next.delete(catKey);
+    else next.add(catKey);
+    // Reactive update — replace the whole object so lit-html re-renders
+    this._editingItem = { ...this._editingItem, activeKeys: next };
+  }
+
   async _saveEditingItem() {
     const e = this._editingItem;
     if (!e) return;
@@ -2057,11 +2119,29 @@ class HaKanbanTodoCard extends LitElementBase {
         ? `${newDesc}\n${posLine}`
         : posLine
       : newDesc;
+    // Sync hashtag tags in the summary with the active label set.
+    let finalSummary = e.summary || "";
+    if (e.cats && e.cats.length) {
+      // Strip ALL configured category hashtags first
+      for (const cat of e.cats) {
+        if (cat.match) {
+          finalSummary = finalSummary.split(cat.match).join("");
+        }
+      }
+      finalSummary = finalSummary.replace(/\s+/g, " ").trim();
+      // Re-append the ones the user kept active
+      const tagsToAdd = e.cats
+        .filter((c) => c.match && e.activeKeys.has(c.key))
+        .map((c) => c.match);
+      if (tagsToAdd.length) {
+        finalSummary = `${finalSummary} ${tagsToAdd.join(" ")}`.trim();
+      }
+    }
     try {
       await this.hass.callService("todo", "update_item", {
         entity_id: e.entity,
         item: e.uid,
-        rename: e.summary,
+        rename: finalSummary,
         status: e.status,
         description: finalDesc,
       });
