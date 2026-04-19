@@ -63,7 +63,7 @@ const css = LitElementBase.prototype.css;
 // Tag de suppression auto stocké dans le summary : #rtrm(start,delay)
 const AUTO_REMOVE_TAG_REGEX = /#rtrm\((\d+),(\d+)\)/;
 
-const HA_KANBAN_TODO_CARD_VERSION = "1.2.1";
+const HA_KANBAN_TODO_CARD_VERSION = "1.2.2";
 
 // Minimum gap between adjacent manual positions before we must renumber
 // (float precision exhaustion — after ~52 midpoint inserts at the same spot).
@@ -1951,12 +1951,17 @@ class HaKanbanTodoCard extends LitElementBase {
       return;
     }
 
+    // Set in-flight FIRST, before any awaits or DOM lookups, so a rapid
+    // second drop hits the guard above instead of racing the data lookup.
+    this._dragOpInFlight = true;
+
     const { item, from, to, newIndex } = ev;
     const uid = item?.dataset?.uid;
     const sourceEntity = from?.closest(".kanban-col")?.dataset?.entity;
     const targetEntity = to?.closest(".kanban-col")?.dataset?.entity;
     if (!uid || !sourceEntity || !targetEntity) {
       this._dragging = false;
+      this._dragOpInFlight = false;
       return;
     }
 
@@ -1969,13 +1974,23 @@ class HaKanbanTodoCard extends LitElementBase {
       sourceItems.find((i) => i.uid === uid) ||
       targetItems.find((i) => i.uid === uid);
     if (!moved) {
+      console.warn(
+        `ha-kanban-todo-card: stale uid ${uid} not in current data — refreshing`
+      );
+      try {
+        await Promise.all([
+          this._fetchItemsFor(sourceEntity),
+          sourceEntity !== targetEntity
+            ? this._fetchItemsFor(targetEntity)
+            : Promise.resolve(),
+        ]);
+        this.requestUpdate();
+        await this.updateComplete;
+      } catch (_e) {
+        /* noop */
+      }
       this._dragging = false;
-      await Promise.all([
-        this._fetchItemsFor(sourceEntity),
-        sourceEntity !== targetEntity
-          ? this._fetchItemsFor(targetEntity)
-          : Promise.resolve(),
-      ]);
+      this._dragOpInFlight = false;
       return;
     }
 
@@ -2007,7 +2022,6 @@ class HaKanbanTodoCard extends LitElementBase {
 
     const newDesc = this._setPositionInDescription(moved.description, newPos);
 
-    this._dragOpInFlight = true;
     try {
       if (sourceEntity === targetEntity) {
         // Same-list reorder: update description with new position
@@ -2061,12 +2075,19 @@ class HaKanbanTodoCard extends LitElementBase {
           console.warn("ha-kanban-todo-card: renumber failed", err);
         }
       }
-      this._dragOpInFlight = false;
+      // CRITICAL: force a render and WAIT for DOM to flush BEFORE releasing
+      // the in-flight lock. Without this, the user could start another drag
+      // against stale DOM (data-uid attributes still pointing at uids the
+      // server has already re-keyed), causing "item_not_found" on the next
+      // service call.
       this._dragging = false;
-      // Force a render now that drag is done — ensures DOM data-uid
-      // attributes reflect the fresh uids from post-drop fetch before
-      // the user can start another drag.
       this.requestUpdate();
+      try {
+        await this.updateComplete;
+      } catch (_e) {
+        /* noop */
+      }
+      this._dragOpInFlight = false;
     }
   }
 
