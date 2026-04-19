@@ -63,7 +63,7 @@ const css = LitElementBase.prototype.css;
 // Tag de suppression auto stocké dans le summary : #rtrm(start,delay)
 const AUTO_REMOVE_TAG_REGEX = /#rtrm\((\d+),(\d+)\)/;
 
-const HA_KANBAN_TODO_CARD_VERSION = "1.3.1";
+const HA_KANBAN_TODO_CARD_VERSION = "1.3.2";
 
 // Minimum gap between adjacent manual positions before we must renumber
 // (float precision exhaustion — after ~52 midpoint inserts at the same spot).
@@ -1824,17 +1824,24 @@ class HaKanbanTodoCard extends LitElementBase {
   }
 
   _openItemEditor(ev, list, item) {
-    // Ignore clicks that come right after a drag (Sortable also fires
-    // a click via the body when the drag delay expires below threshold).
+    // Ignore clicks that come right after a drag.
     if (this._dragOpInFlight || this._dragging) return;
     ev.stopPropagation();
-    // Fire HA's hass-more-info — shows the entity dialog where the user
-    // can edit individual items. This is what the native todo-list card
-    // does too; HA owns the edit UI so we don't have to build a dialog.
-    const event = new CustomEvent("hass-more-info", {
-      detail: { entityId: list.entity },
+    // Open HA's per-item editor dialog — same dialog the native todo-list
+    // card uses (dialog-todo-item-editor). HA owns the form, we just
+    // trigger it via the standard show-dialog event.
+    const event = new CustomEvent("show-dialog", {
       bubbles: true,
       composed: true,
+      detail: {
+        dialogTag: "dialog-todo-item-editor",
+        dialogImport: () =>
+          customElements.whenDefined("dialog-todo-item-editor"),
+        dialogParams: {
+          entity: list.entity,
+          item: item,
+        },
+      },
     });
     this.dispatchEvent(event);
   }
