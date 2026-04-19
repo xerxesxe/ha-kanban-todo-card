@@ -63,7 +63,7 @@ const css = LitElementBase.prototype.css;
 // Tag de suppression auto stocké dans le summary : #rtrm(start,delay)
 const AUTO_REMOVE_TAG_REGEX = /#rtrm\((\d+),(\d+)\)/;
 
-const HA_KANBAN_TODO_CARD_VERSION = "1.3.2";
+const HA_KANBAN_TODO_CARD_VERSION = "1.4.0";
 
 // Minimum gap between adjacent manual positions before we must renumber
 // (float precision exhaustion — after ~52 midpoint inserts at the same spot).
@@ -685,7 +685,14 @@ const UI_LABELS = {
     entity_missing: (id) => `Entity not found: ${id}`,
     confirm_delete: (label) => `Permanently delete this task?\n\n"${label}"`,
     due_prefix: "Due",
-    edit_hint: "Click to open the list dialog for editing",
+    edit_hint: "Click to edit",
+    edit_title: "Edit task",
+    edit_summary: "Title",
+    edit_description: "Description",
+    edit_completed: "Completed",
+    edit_save: "Save",
+    edit_cancel: "Cancel",
+    edit_delete: "Delete",
   },
   fr: {
     config_missing_lists:
@@ -704,7 +711,14 @@ const UI_LABELS = {
     confirm_delete: (label) =>
       `Supprimer définitivement la tâche :\n\n"${label}" ?`,
     due_prefix: "Échéance",
-    edit_hint: "Cliquer pour ouvrir le dialogue de la liste",
+    edit_hint: "Cliquer pour modifier",
+    edit_title: "Modifier la tâche",
+    edit_summary: "Titre",
+    edit_description: "Description",
+    edit_completed: "Terminée",
+    edit_save: "Enregistrer",
+    edit_cancel: "Annuler",
+    edit_delete: "Supprimer",
   },
   de: {
     config_missing_lists: "HA Kanban Todo Card benötigt ein 'lists'-Feld.",
@@ -721,7 +735,14 @@ const UI_LABELS = {
     entity_missing: (id) => `Entität nicht gefunden: ${id}`,
     confirm_delete: (label) => `Diese Aufgabe dauerhaft löschen?\n\n"${label}"`,
     due_prefix: "Fällig",
-    edit_hint: "Klicken zum Öffnen des Listen-Dialogs",
+    edit_hint: "Klicken zum Bearbeiten",
+    edit_title: "Aufgabe bearbeiten",
+    edit_summary: "Titel",
+    edit_description: "Beschreibung",
+    edit_completed: "Erledigt",
+    edit_save: "Speichern",
+    edit_cancel: "Abbrechen",
+    edit_delete: "Löschen",
   },
   es: {
     config_missing_lists: "HA Kanban Todo Card necesita un campo 'lists'.",
@@ -738,7 +759,14 @@ const UI_LABELS = {
     entity_missing: (id) => `Entidad no encontrada: ${id}`,
     confirm_delete: (label) => `¿Eliminar esta tarea permanentemente?\n\n"${label}"`,
     due_prefix: "Vence",
-    edit_hint: "Pulsa para abrir el diálogo de la lista",
+    edit_hint: "Pulsa para editar",
+    edit_title: "Editar tarea",
+    edit_summary: "Título",
+    edit_description: "Descripción",
+    edit_completed: "Completada",
+    edit_save: "Guardar",
+    edit_cancel: "Cancelar",
+    edit_delete: "Eliminar",
   },
 };
 
@@ -754,6 +782,7 @@ class HaKanbanTodoCard extends LitElementBase {
       _holdTimer: { type: Object },
       _holdActive: { type: Boolean },
       _dragging: { type: Boolean },
+      _editingItem: { type: Object },
     };
   }
 
@@ -1437,6 +1466,100 @@ class HaKanbanTodoCard extends LitElementBase {
         transform: rotate(1deg);
       }
 
+      /* ============ Edit dialog ============ */
+      .edit-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.4);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+      }
+      .edit-dialog {
+        background: var(--card-background-color, white);
+        color: var(--primary-text-color);
+        border-radius: 12px;
+        padding: 20px;
+        min-width: 320px;
+        max-width: 480px;
+        width: 90vw;
+        max-height: 85vh;
+        overflow-y: auto;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .edit-title {
+        font-weight: 600;
+        font-size: 1.15em;
+        margin-bottom: 4px;
+      }
+      .edit-label {
+        font-size: 0.85em;
+        color: var(--secondary-text-color);
+        margin-top: 8px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .edit-input,
+      .edit-textarea {
+        font: inherit;
+        color: inherit;
+        padding: 8px 10px;
+        border: 1px solid var(--divider-color);
+        border-radius: 6px;
+        background: var(--secondary-background-color, transparent);
+      }
+      .edit-textarea {
+        resize: vertical;
+        min-height: 80px;
+        font-family: inherit;
+      }
+      .edit-input:focus,
+      .edit-textarea:focus {
+        outline: 2px solid var(--primary-color);
+        outline-offset: -2px;
+      }
+      .edit-buttons {
+        display: flex;
+        gap: 8px;
+        margin-top: 16px;
+        align-items: center;
+      }
+      .edit-spacer {
+        flex: 1;
+      }
+      .edit-btn {
+        font: inherit;
+        padding: 8px 16px;
+        border: 1px solid var(--divider-color);
+        border-radius: 6px;
+        background: var(--secondary-background-color, transparent);
+        color: inherit;
+        cursor: pointer;
+      }
+      .edit-btn:hover {
+        background: var(--divider-color);
+      }
+      .edit-btn-primary {
+        background: var(--primary-color);
+        color: var(--text-primary-color, white);
+        border-color: var(--primary-color);
+      }
+      .edit-btn-primary:hover {
+        opacity: 0.9;
+      }
+      .edit-btn-danger {
+        color: var(--error-color, #ef4444);
+        border-color: var(--error-color, #ef4444);
+      }
+      .edit-btn-danger:hover {
+        background: color-mix(in srgb, var(--error-color, #ef4444) 15%, transparent);
+      }
+
       /* ============ Kanban item cards ============ */
       /* In Kanban mode, each item is its own visually separated card. */
       .kanban-col .item {
@@ -1494,6 +1617,7 @@ class HaKanbanTodoCard extends LitElementBase {
         >
           ${lists.map((l) => this._renderKanbanColumn(l))}
         </div>
+        ${this._renderEditDialog()}
       </ha-card>
     `;
   }
@@ -1827,23 +1951,129 @@ class HaKanbanTodoCard extends LitElementBase {
     // Ignore clicks that come right after a drag.
     if (this._dragOpInFlight || this._dragging) return;
     ev.stopPropagation();
-    // Open HA's per-item editor dialog — same dialog the native todo-list
-    // card uses (dialog-todo-item-editor). HA owns the form, we just
-    // trigger it via the standard show-dialog event.
-    const event = new CustomEvent("show-dialog", {
-      bubbles: true,
-      composed: true,
-      detail: {
-        dialogTag: "dialog-todo-item-editor",
-        dialogImport: () =>
-          customElements.whenDefined("dialog-todo-item-editor"),
-        dialogParams: {
-          entity: list.entity,
-          item: item,
-        },
-      },
-    });
-    this.dispatchEvent(event);
+    // Open our own inline dialog. HA's per-item editor module
+    // (dialog-todo-item-editor) is lazy-loaded and not available unless
+    // the user has opened a native todo card before, so we ship our own.
+    const rawDesc = item.description || "";
+    // Strip our internal `position:` line from the user-facing textarea.
+    const visibleDesc = rawDesc
+      .split("\n")
+      .filter((l) => !/^\s*position:\s*-?\d+(?:\.\d+)?\s*$/.test(l))
+      .join("\n")
+      .trim();
+    this._editingItem = {
+      entity: list.entity,
+      uid: item.uid,
+      summary: item.summary || "",
+      description: visibleDesc,
+      rawDescription: rawDesc,
+      status: item.status || "needs_action",
+      due: item.due || item.due_date || "",
+    };
+  }
+
+  _renderEditDialog() {
+    if (!this._editingItem) return "";
+    const e = this._editingItem;
+    return html`
+      <div
+        class="edit-backdrop"
+        @click=${(ev) => {
+          if (ev.target.classList.contains("edit-backdrop"))
+            this._editingItem = null;
+        }}
+      >
+        <div class="edit-dialog" @click=${(ev) => ev.stopPropagation()}>
+          <div class="edit-title">${this._ui("edit_title")}</div>
+
+          <label class="edit-label">${this._ui("edit_summary")}</label>
+          <input
+            class="edit-input"
+            type="text"
+            .value=${e.summary}
+            @input=${(ev) => (this._editingItem.summary = ev.target.value)}
+          />
+
+          <label class="edit-label">${this._ui("edit_description")}</label>
+          <textarea
+            class="edit-textarea"
+            rows="4"
+            .value=${e.description}
+            @input=${(ev) => (this._editingItem.description = ev.target.value)}
+          ></textarea>
+
+          <label class="edit-label">
+            <input
+              type="checkbox"
+              .checked=${e.status === "completed"}
+              @change=${(ev) =>
+                (this._editingItem.status = ev.target.checked
+                  ? "completed"
+                  : "needs_action")}
+            />
+            ${this._ui("edit_completed")}
+          </label>
+
+          <div class="edit-buttons">
+            <button class="edit-btn edit-btn-danger" @click=${() => this._deleteEditingItem()}>
+              ${this._ui("edit_delete")}
+            </button>
+            <div class="edit-spacer"></div>
+            <button class="edit-btn" @click=${() => (this._editingItem = null)}>
+              ${this._ui("edit_cancel")}
+            </button>
+            <button class="edit-btn edit-btn-primary" @click=${() => this._saveEditingItem()}>
+              ${this._ui("edit_save")}
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  async _saveEditingItem() {
+    const e = this._editingItem;
+    if (!e) return;
+    // Re-attach the position line we stripped for editing
+    const posLineMatch = (e.rawDescription || "").match(
+      /(?:^|\n)(position:\s*-?\d+(?:\.\d+)?)(?:\n|$)/
+    );
+    const posLine = posLineMatch ? posLineMatch[1] : null;
+    const newDesc = (e.description || "").trim();
+    const finalDesc = posLine
+      ? newDesc
+        ? `${newDesc}\n${posLine}`
+        : posLine
+      : newDesc;
+    try {
+      await this.hass.callService("todo", "update_item", {
+        entity_id: e.entity,
+        item: e.uid,
+        rename: e.summary,
+        status: e.status,
+        description: finalDesc,
+      });
+      await this._fetchItemsFor(e.entity);
+    } catch (err) {
+      console.error("ha-kanban-todo-card: edit save failed", err);
+    }
+    this._editingItem = null;
+  }
+
+  async _deleteEditingItem() {
+    const e = this._editingItem;
+    if (!e) return;
+    if (!confirm(this._ui("confirm_delete", e.summary))) return;
+    try {
+      await this.hass.callService("todo", "remove_item", {
+        entity_id: e.entity,
+        item: e.uid,
+      });
+      await this._fetchItemsFor(e.entity);
+    } catch (err) {
+      console.error("ha-kanban-todo-card: edit delete failed", err);
+    }
+    this._editingItem = null;
   }
 
   _onItemPointerDown(e, list, item) {
