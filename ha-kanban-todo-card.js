@@ -63,7 +63,7 @@ const css = LitElementBase.prototype.css;
 // Tag de suppression auto stocké dans le summary : #rtrm(start,delay)
 const AUTO_REMOVE_TAG_REGEX = /#rtrm\((\d+),(\d+)\)/;
 
-const HA_KANBAN_TODO_CARD_VERSION = "1.4.0";
+const HA_KANBAN_TODO_CARD_VERSION = "1.4.1";
 
 // Minimum gap between adjacent manual positions before we must renumber
 // (float precision exhaustion — after ~52 midpoint inserts at the same spot).
@@ -778,6 +778,7 @@ class HaKanbanTodoCard extends LitElementBase {
       _activeIndex: { type: Number },
       _itemsByEntity: { type: Object },
       _newText: { type: String },
+      _newTextByEntity: { type: Object },
       _selectedCatByEntity: { type: Object },
       _holdTimer: { type: Object },
       _holdActive: { type: Boolean },
@@ -826,6 +827,7 @@ class HaKanbanTodoCard extends LitElementBase {
     this._activeIndex = 0;
     this._itemsByEntity = {};
     this._newText = "";
+    this._newTextByEntity = {};
     this._selectedCatByEntity = {};
     this._holdTimer = null;
     this._holdActive = false;
@@ -1854,14 +1856,24 @@ class HaKanbanTodoCard extends LitElementBase {
     const entityId = list.entity;
     const cats = this._getCategories(list);
     const selectedKey = this._selectedCatByEntity[entityId] || null;
+    // Per-entity input value so 4 columns don't share the same text state.
+    const text =
+      (this._newTextByEntity && this._newTextByEntity[entityId]) || "";
+
+    const onInput = (e) => {
+      this._newTextByEntity = {
+        ...(this._newTextByEntity || {}),
+        [entityId]: e.target.value,
+      };
+    };
 
     return html`
       <div class="add-row">
         <input
           type="text"
-          .value=${this._newText || ""}
+          .value=${text}
           placeholder=${this._ui("add_placeholder")}
-          @input=${(e) => (this._newText = e.target.value)}
+          @input=${onInput}
           @keydown=${(e) => this._onInputKeydown(e, list)}
         />
         <button @click=${() => this._addItem(list)}>
@@ -1869,7 +1881,7 @@ class HaKanbanTodoCard extends LitElementBase {
         </button>
       </div>
 
-      ${cats.length && this._newText && this._newText.trim() !== ""
+      ${cats.length && text.trim() !== ""
         ? html`
             <div class="cat-row">
               ${cats.map((cat) => {
@@ -2663,30 +2675,49 @@ class HaKanbanTodoCard extends LitElementBase {
   async _addItem(list) {
     if (!this.hass || !list?.entity) return;
 
-    let text = (this._newText || "").trim();
+    const entityId = list.entity;
+    // Prefer per-entity input value (kanban); fall back to legacy global
+    // _newText for tabs layout.
+    const fromMap =
+      this._newTextByEntity && this._newTextByEntity[entityId];
+    let text = (fromMap || this._newText || "").trim();
     if (!text) return;
 
-    const entityId = list.entity;
     const cats = this._getCategories(list);
     const selectedKey = this._selectedCatByEntity[entityId] || null;
     let cat = cats.find((c) => c.key === selectedKey);
-
-    if (!cat) {
-      cat = this._getDefaultCategory(list);
-    }
-
+    if (!cat) cat = this._getDefaultCategory(list);
     if (cat && cat.match) {
       text = `${text} ${cat.match}`;
     }
 
+    // Compute position so the new item appears at the TOP of its list
+    // (kanban convention: newest on top). Use min(existing positions) - 1000.
+    const existing = (this._itemsByEntity[entityId] || []).filter(
+      (i) => i.status !== "completed"
+    );
+    let minPos = null;
+    for (const i of existing) {
+      const p = this._getItemPosition(i);
+      if (p !== null && (minPos === null || p < minPos)) minPos = p;
+    }
+    const newPos = minPos === null ? 1000 : minPos - 1000;
+    const description = `position: ${newPos}`;
+
     try {
       await this.hass.callService("todo", "add_item", {
-        entity_id: list.entity,
+        entity_id: entityId,
         item: text,
+        description,
       });
-
+      // Clear both the per-entity and legacy text states
+      if (this._newTextByEntity) {
+        const next = { ...this._newTextByEntity };
+        delete next[entityId];
+        this._newTextByEntity = next;
+      }
       this._newText = "";
-      await this._fetchItemsFor(list.entity);
+      await this._fetchItemsFor(entityId);
     } catch (err) {
       console.error("HA Kanban Todo Card: erreur ajout item", err);
     }
