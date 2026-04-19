@@ -63,7 +63,7 @@ const css = LitElementBase.prototype.css;
 // Tag de suppression auto stocké dans le summary : #rtrm(start,delay)
 const AUTO_REMOVE_TAG_REGEX = /#rtrm\((\d+),(\d+)\)/;
 
-const HA_KANBAN_TODO_CARD_VERSION = "1.2.3";
+const HA_KANBAN_TODO_CARD_VERSION = "1.3.0";
 
 // Minimum gap between adjacent manual positions before we must renumber
 // (float precision exhaustion — after ~52 midpoint inserts at the same spot).
@@ -798,6 +798,8 @@ class HaKanbanTodoCard extends LitElementBase {
     this._holdActive = false;
     this._kanbanUiState = {};
     this._dragging = false;
+    // Verbose console logging for DnD — enable via `debug: true` in card config.
+    this._kanbanDebug = !!config.debug;
   }
 
   set hass(hass) {
@@ -1899,15 +1901,43 @@ class HaKanbanTodoCard extends LitElementBase {
         preventOnFilter: false,
         onStart: (ev) => {
           this._dragging = true;
-          // Capture uid + source column at drag-start, when DOM is still
-          // fresh from the last render. Reading uid at drop time is unsafe
-          // because SortableJS already moved the DOM and our keyed lookup
-          // could collide with a re-render in flight.
+          // Capture uid + source column at drag-start, when DOM still
+          // matches our last render.
           this._dragStartUid = ev?.item?.dataset?.uid || null;
           this._dragStartSourceEntity =
             ev?.item?.closest?.(".kanban-col")?.dataset?.entity || null;
+          if (this._kanbanDebug) {
+            console.log("[ha-kanban] onStart", {
+              uid: this._dragStartUid,
+              source: this._dragStartSourceEntity,
+              oldIndex: ev.oldIndex,
+              oldDraggableIndex: ev.oldDraggableIndex,
+            });
+          }
         },
-        onEnd: (ev) => this._onSortableEnd(ev),
+        onEnd: (ev) => {
+          // Capture metadata from the SortableJS event BEFORE we revert
+          // its DOM mutation (revert resets indices).
+          const meta = {
+            uid: this._dragStartUid,
+            sourceEntity: this._dragStartSourceEntity,
+            targetEntity:
+              ev?.to?.closest?.(".kanban-col")?.dataset?.entity || null,
+            oldIndex: ev.oldIndex,
+            newIndex: ev.newIndex,
+            oldDraggableIndex: ev.oldDraggableIndex,
+            newDraggableIndex: ev.newDraggableIndex,
+            from: ev.from,
+            to: ev.to,
+            item: ev.item,
+          };
+          // Revert SortableJS's DOM mutation. Without this, lit-html's
+          // internal cache of where each rendered template lives gets
+          // out of sync (we render via .map() which is unkeyed). Stale
+          // data-uid attributes then leak into onStart of the next drag.
+          this._revertSortableMove(ev);
+          this._onSortableEnd(meta);
+        },
       });
       this._sortablesMap.set(col, instance);
     });
@@ -1949,9 +1979,30 @@ class HaKanbanTodoCard extends LitElementBase {
     }
   }
 
-  async _onSortableEnd(ev) {
-    // Ignore a second drop if the previous one is still flushing to HA.
-    // Prevents using a stale uid (from a DOM node LitElement is about to replace).
+  // Revert SortableJS's DOM mutation. lit-html (.map without keys) cannot
+  // reconcile when DOM nodes were moved by an external library, leading to
+  // stale data-uid attributes leaking forward. By reverting here, the
+  // subsequent re-render places the item at its new position based on data
+  // alone (the position field), with lit-html owning the DOM transitions.
+  _revertSortableMove(ev) {
+    try {
+      if (ev.from !== ev.to) {
+        // Cross-list: move back to source at its old position.
+        const ref = ev.from.children[ev.oldIndex] || null;
+        ev.from.insertBefore(ev.item, ref);
+      } else if (ev.oldIndex !== ev.newIndex) {
+        // Same-list reorder: put back at oldIndex.
+        const ref = ev.from.children[ev.oldIndex] || null;
+        if (ref !== ev.item) {
+          ev.from.insertBefore(ev.item, ref);
+        }
+      }
+    } catch (_e) {
+      /* noop — non-fatal, render will reset DOM anyway */
+    }
+  }
+
+  async _onSortableEnd(meta) {
     if (this._dragOpInFlight) {
       console.warn(
         "ha-kanban-todo-card: drop ignored — previous operation still in flight"
@@ -1959,66 +2010,100 @@ class HaKanbanTodoCard extends LitElementBase {
       this._dragging = false;
       return;
     }
-
-    // Set in-flight FIRST, before any awaits or DOM lookups, so a rapid
-    // second drop hits the guard above instead of racing the data lookup.
     this._dragOpInFlight = true;
 
-    const { item, from, to, newIndex } = ev;
-    // Prefer uid captured at drag-start (DOM was fresh then). Fall back to
-    // reading from current DOM if onStart didn't capture (defensive).
-    const uid = this._dragStartUid || item?.dataset?.uid;
-    const sourceEntity =
-      this._dragStartSourceEntity ||
-      from?.closest(".kanban-col")?.dataset?.entity;
-    const targetEntity = to?.closest(".kanban-col")?.dataset?.entity;
-    // Clear capture immediately so a stray onEnd later can't reuse it
+    const {
+      uid,
+      sourceEntity,
+      targetEntity,
+      oldIndex,
+      newIndex,
+    } = meta;
+
+    // Clear capture immediately so a stray onEnd later can't reuse it.
     this._dragStartUid = null;
     this._dragStartSourceEntity = null;
+
+    if (this._kanbanDebug) {
+      console.log("[ha-kanban] onEnd start", {
+        uid,
+        source: sourceEntity,
+        target: targetEntity,
+        oldIndex,
+        newIndex,
+      });
+    }
+
     if (!uid || !sourceEntity || !targetEntity) {
+      console.warn("[ha-kanban] missing uid/entity, abort", { uid, sourceEntity, targetEntity });
       this._dragging = false;
       this._dragOpInFlight = false;
       return;
+    }
+
+    // Refresh state BEFORE any service calls — guarantees we operate on
+    // the freshest server truth, not a possibly-stale local cache. This
+    // is the single most important fix: even if the DOM uid was perfectly
+    // captured at onStart, our LOCAL cache may be lagging if an earlier
+    // drop's fetch hasn't fully propagated.
+    try {
+      await Promise.all([
+        this._fetchItemsFor(sourceEntity),
+        sourceEntity !== targetEntity
+          ? this._fetchItemsFor(targetEntity)
+          : Promise.resolve(),
+      ]);
+    } catch (err) {
+      console.warn("[ha-kanban] pre-fetch failed", err);
     }
 
     const sourceItems = this._itemsByEntity[sourceEntity] || [];
     const targetItems = this._itemsByEntity[targetEntity] || [];
 
-    // Stale-uid guard: if the DOM uid is unknown to our data (because a
-    // previous drop already re-keyed it on the server), abort and refresh.
     const moved =
       sourceItems.find((i) => i.uid === uid) ||
       targetItems.find((i) => i.uid === uid);
     if (!moved) {
       console.warn(
-        `ha-kanban-todo-card: stale uid ${uid} not in current data — refreshing`
+        `[ha-kanban] uid ${uid} no longer exists in ${sourceEntity} or ${targetEntity} — abort`
       );
-      try {
-        await Promise.all([
-          this._fetchItemsFor(sourceEntity),
-          sourceEntity !== targetEntity
-            ? this._fetchItemsFor(targetEntity)
-            : Promise.resolve(),
-        ]);
-        this.requestUpdate();
-        await this.updateComplete;
-      } catch (_e) {
-        /* noop */
-      }
+      this.requestUpdate();
+      try { await this.updateComplete; } catch (_e) { /* noop */ }
       this._dragging = false;
       this._dragOpInFlight = false;
       return;
     }
 
-    // Compute new position from siblings (after the DOM move)
-    const targetNodes = Array.from(to.querySelectorAll(".item"));
-    const uids = targetNodes.map((n) => n.dataset.uid);
-    const prevUid = uids[newIndex - 1];
-    const nextUid = uids[newIndex + 1];
-    const prevItem = targetItems.find((i) => i.uid === prevUid);
-    const nextItem = targetItems.find((i) => i.uid === nextUid);
-    const prevPos = prevItem ? this._getItemPosition(prevItem) : null;
-    const nextPos = nextItem ? this._getItemPosition(nextItem) : null;
+    // Compute new position from DATA, not DOM — DOM was reverted above
+    // so it doesn't reflect the user's drop intent anymore. Build the
+    // post-move sorted list mentally and read positions from neighbors.
+    const sortedTarget = this._sortItemsForList(
+      { sort_by: "manual" },
+      targetItems
+    ).filter((i) => i.status !== "completed");
+
+    let prevPos = null;
+    let nextPos = null;
+    if (sourceEntity === targetEntity) {
+      // Same-list reorder — moved item still in sortedTarget at oldIndex
+      const reordered = [...sortedTarget];
+      const movedIdx = reordered.findIndex((i) => i.uid === uid);
+      if (movedIdx >= 0) {
+        const [item] = reordered.splice(movedIdx, 1);
+        reordered.splice(newIndex, 0, item);
+      }
+      const prev = reordered[newIndex - 1];
+      const next = reordered[newIndex + 1];
+      if (prev && prev.uid !== uid) prevPos = this._getItemPosition(prev);
+      if (next && next.uid !== uid) nextPos = this._getItemPosition(next);
+    } else {
+      // Cross-list — moved item not yet in sortedTarget. newIndex is the
+      // visual position the user dropped it at among target's items.
+      const prev = sortedTarget[newIndex - 1];
+      const next = sortedTarget[newIndex];
+      if (prev) prevPos = this._getItemPosition(prev);
+      if (next) nextPos = this._getItemPosition(next);
+    }
 
     let newPos;
     if (prevPos === null && nextPos === null) {
@@ -2029,18 +2114,25 @@ class HaKanbanTodoCard extends LitElementBase {
       newPos = prevPos + 500;
     } else {
       newPos = (prevPos + nextPos) / 2;
-      if (Math.abs(newPos - prevPos) < MIN_POSITION_GAP || Math.abs(nextPos - newPos) < MIN_POSITION_GAP) {
-        // Float precision exhausted — trigger a renumber for this list.
+      if (
+        Math.abs(newPos - prevPos) < MIN_POSITION_GAP ||
+        Math.abs(nextPos - newPos) < MIN_POSITION_GAP
+      ) {
         this._pendingRenumber = targetEntity;
-        newPos = prevPos + MIN_POSITION_GAP; // best-effort placeholder
+        newPos = prevPos + MIN_POSITION_GAP;
       }
+    }
+
+    if (this._kanbanDebug) {
+      console.log("[ha-kanban] computed position", {
+        prevPos, nextPos, newPos,
+      });
     }
 
     const newDesc = this._setPositionInDescription(moved.description, newPos);
 
     try {
       if (sourceEntity === targetEntity) {
-        // Same-list reorder: update description with new position
         await this.hass.callService("todo", "update_item", {
           entity_id: sourceEntity,
           item: uid,
@@ -2048,9 +2140,6 @@ class HaKanbanTodoCard extends LitElementBase {
         });
         await this._fetchItemsFor(sourceEntity);
       } else {
-        // Cross-list: ADD to target FIRST, then remove from source.
-        // If the second call fails we end up with a duplicate (recoverable
-        // by the user) rather than a lost task.
         const addPayload = {
           entity_id: targetEntity,
           item: moved.summary,
@@ -2071,7 +2160,6 @@ class HaKanbanTodoCard extends LitElementBase {
       }
     } catch (err) {
       console.error("ha-kanban-todo-card: sortable end failed", err);
-      // Refresh to sync UI with server truth.
       try {
         await Promise.all([
           this._fetchItemsFor(sourceEntity),

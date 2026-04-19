@@ -1,8 +1,31 @@
-# Changelog
+\1## [1.3.0] - 2026-04-19
 
-All notable changes to this project will be documented in this file.
+### Fixed (the big DnD overhaul)
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+The card now reverts SortableJS's DOM mutation in `onEnd` before processing
+the drop. This is the standard pattern for combining SortableJS with a
+reactive framework that owns the DOM. Without it, lit-html's internal cache
+of where each rendered template lives drifts away from reality (we use
+`.map()` which is unkeyed), and stale `data-uid` attributes leak into
+the next drag, causing `Validation error: item_not_found` from HA.
+
+Position is now computed from DATA neighbours (sorted by position field),
+not DOM neighbours. After the revert the DOM no longer reflects the
+user's drop intent — only `ev.newIndex` does.
+
+State is refreshed from HA BEFORE the service calls run, eliminating the
+race where our local cache lags behind the server after rapid drops.
+
+### Added
+- `debug: true` config option — verbose console logging for the DnD flow.
+- Headless test harness (`/tmp/test-card-flow.mjs`, `/tmp/test-stale-uid.mjs`)
+  that runs the real card class against the real HA WebSocket API. Catches
+  regressions before they hit the browser.
+
+### Verified
+- Three rapid cross-list moves complete cleanly (uid threading correct).
+- Stale-uid drop (captured uid no longer in any list) is caught by the
+  guard and aborts without a HA service error.
 
 ## [1.2.0] - 2026-04-19
 
