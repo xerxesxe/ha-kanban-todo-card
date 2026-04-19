@@ -63,7 +63,7 @@ const css = LitElementBase.prototype.css;
 // Tag de suppression auto stocké dans le summary : #rtrm(start,delay)
 const AUTO_REMOVE_TAG_REGEX = /#rtrm\((\d+),(\d+)\)/;
 
-const HA_KANBAN_TODO_CARD_VERSION = "1.2.2";
+const HA_KANBAN_TODO_CARD_VERSION = "1.2.3";
 
 // Minimum gap between adjacent manual positions before we must renumber
 // (float precision exhaustion — after ~52 midpoint inserts at the same spot).
@@ -1897,7 +1897,16 @@ class HaKanbanTodoCard extends LitElementBase {
         dragClass: "sortable-drag",
         filter: ".item-icon",
         preventOnFilter: false,
-        onStart: () => { this._dragging = true; },
+        onStart: (ev) => {
+          this._dragging = true;
+          // Capture uid + source column at drag-start, when DOM is still
+          // fresh from the last render. Reading uid at drop time is unsafe
+          // because SortableJS already moved the DOM and our keyed lookup
+          // could collide with a re-render in flight.
+          this._dragStartUid = ev?.item?.dataset?.uid || null;
+          this._dragStartSourceEntity =
+            ev?.item?.closest?.(".kanban-col")?.dataset?.entity || null;
+        },
         onEnd: (ev) => this._onSortableEnd(ev),
       });
       this._sortablesMap.set(col, instance);
@@ -1956,9 +1965,16 @@ class HaKanbanTodoCard extends LitElementBase {
     this._dragOpInFlight = true;
 
     const { item, from, to, newIndex } = ev;
-    const uid = item?.dataset?.uid;
-    const sourceEntity = from?.closest(".kanban-col")?.dataset?.entity;
+    // Prefer uid captured at drag-start (DOM was fresh then). Fall back to
+    // reading from current DOM if onStart didn't capture (defensive).
+    const uid = this._dragStartUid || item?.dataset?.uid;
+    const sourceEntity =
+      this._dragStartSourceEntity ||
+      from?.closest(".kanban-col")?.dataset?.entity;
     const targetEntity = to?.closest(".kanban-col")?.dataset?.entity;
+    // Clear capture immediately so a stray onEnd later can't reuse it
+    this._dragStartUid = null;
+    this._dragStartSourceEntity = null;
     if (!uid || !sourceEntity || !targetEntity) {
       this._dragging = false;
       this._dragOpInFlight = false;
